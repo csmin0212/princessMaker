@@ -14,6 +14,10 @@ import { SeasonalEventScreen } from "./seasonal-event-screen"
 import { TalkScreen } from "./talk-screen"
 import { WardrobeScreen } from "./wardrobe-screen"
 import { EndingSelectScreen } from "./ending-select-screen"
+import { DungeonSelectScreen } from "./dungeon-select-screen"
+import { DungeonPrepScreen } from "./dungeon-prep-screen"
+import { CraftScreen } from "./craft-screen"
+import { PerkScreen } from "./perk-screen"
 import { EventResultModal } from "./event-result-modal"
 
 export function Game() {
@@ -42,6 +46,14 @@ export function Game() {
             return <EndingBookScreen />
           case "ending-select":
             return <EndingSelectScreen />
+          case "dungeon-select":
+            return <DungeonSelectScreen />
+          case "dungeon-prep":
+            return <DungeonPrepScreen />
+          case "craft":
+            return <CraftScreen />
+          case "perk":
+            return <PerkScreen />
           case "dungeon":
             return <DungeonScreen />
           case "seasonal":

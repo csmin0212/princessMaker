@@ -27,18 +27,26 @@ const resultStyle: Record<string, string> = {
   empty:    'bg-gray-50 border-gray-200 text-gray-500',
 }
 
+
+const statEmoji: Record<string, string> = {
+  strength: '💪체', intelligence: '📚지', charm: '✨매', creativity: '🎨예',
+  morality: '🌿도', faith: '🙏신', combat: '⚔전', magic: '🔮마',
+  cooking: '🍳요', housework: '🏠가',
+}
+
 export function SchedulePanel() {
   const {
     weekSchedule, setWeekSchedule, executeWeek, weekResult, clearWeekResult,
-    character, month, week,
+    character, month, week, setScreen, resultWeek, resultMonth, gold,
   } = useGameStore()
 
   const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null)
   const [revealedDays, setRevealedDays] = useState<number>(0)
   const [isExecuting, setIsExecuting] = useState(false)
 
-  // 주간 시작 일자
+  // 주간 시작 일자 (결과 표시 시 resultWeek 사용)
   const weekStartDay = (week - 1) * 7 + 1
+  const resultStartDay = (resultWeek - 1) * 7 + 1
 
   // 생일 체크
   const birthdayDay = character.birthday.day
@@ -103,7 +111,21 @@ export function SchedulePanel() {
     setRevealedDays(0)
   }
 
-  const filledCount = weekSchedule.filter(s => s !== null).length
+  // 생일 슬롯도 채워진 칸으로 카운트
+  const birthdaySlotCount = Array.from({ length: 7 }, (_, i) => isBirthdaySlot(i)).filter(Boolean).length
+  const filledCount = weekSchedule.filter(s => s !== null).length + birthdaySlotCount
+
+  // 요구 조건 충족 여부 체크
+  const meetsRequirements = (activity: Activity): boolean => {
+    if (!activity.requirements) return true
+    for (const [stat, val] of Object.entries(activity.requirements)) {
+      if ((character.stats[stat as keyof typeof character.stats] || 0) < (val || 0)) return false
+    }
+    return true
+  }
+  const canAffordActivity = (activity: Activity): boolean =>
+    activity.goldChange >= 0 || gold >= Math.abs(activity.goldChange)
+  const isActivityAvailable = (activity: Activity) => meetsRequirements(activity) && canAffordActivity(activity)
 
   // 결과 표시 화면
   if (weekResult) {
@@ -111,7 +133,7 @@ export function SchedulePanel() {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-serif font-bold flex items-center gap-2">
-            <span>📅</span> {month}월 {weekStartDay}~{weekStartDay + 6}일 결과
+            <span>📅</span> {resultMonth}월 {resultStartDay}~{resultStartDay + 6}일 결과
           </h2>
           {revealedDays >= weekResult.length && (
             <Button onClick={handleClearResult} size="sm">
@@ -156,12 +178,12 @@ export function SchedulePanel() {
               {/* 변화량 */}
               {i < revealedDays && (result.statChanges || result.goldChange) && (
                 <div className="flex flex-wrap gap-0.5 justify-center mt-1">
-                  {result.statChanges && Object.entries(result.statChanges).slice(0, 2).map(([stat, val]) => (
+                  {result.statChanges && Object.entries(result.statChanges).map(([stat, val]) => (
                     <span key={stat} className={cn(
-                      "text-[10px] px-1 rounded-full font-medium",
+                      "text-[10px] px-1.5 rounded-full font-medium",
                       (val ?? 0) > 0 ? "bg-green-200 text-green-800" : "bg-red-200 text-red-800"
                     )}>
-                      {(val ?? 0) > 0 ? '+' : ''}{val}
+                      {statEmoji[stat] || stat} {(val ?? 0) > 0 ? '+' : ''}{val}
                     </span>
                   ))}
                   {result.goldChange && (
@@ -238,13 +260,72 @@ export function SchedulePanel() {
 
       {/* 활동 선택 팁 */}
       {selectedActivity ? (
-        <div className="flex items-center gap-2 px-3 py-2 bg-primary/10 rounded-lg border border-primary/30 text-sm">
-          <span className="text-xl">{selectedActivity.icon}</span>
-          <span className="font-medium text-primary">{selectedActivity.name}</span>
-          <span className="text-muted-foreground">— 날짜 칸을 클릭해서 배치하세요</span>
-          <Button size="sm" variant="ghost" className="ml-auto h-6 px-2 text-xs" onClick={() => setSelectedActivity(null)}>
-            취소
-          </Button>
+        <div className="flex flex-col gap-2 px-3 py-2 bg-primary/10 rounded-lg border border-primary/30 text-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">{selectedActivity.icon}</span>
+            <span className="font-medium text-primary">{selectedActivity.name}</span>
+            <span className="text-muted-foreground text-xs">— 날짜 칸을 클릭해서 배치하세요</span>
+            <Button size="sm" variant="ghost" className="ml-auto h-6 px-2 text-xs" onClick={() => setSelectedActivity(null)}>
+              취소
+            </Button>
+          </div>
+          {/* 예상 수련 결과 */}
+          <div className="flex flex-wrap gap-1.5 text-xs">
+            <span className="text-muted-foreground font-medium">수련 결과 예상:</span>
+            {Object.entries(selectedActivity.statChanges).map(([stat, val]) => {
+              const statShort: Record<string, string> = {
+                strength:'체력', intelligence:'지능', charm:'매력',
+                creativity:'예술', morality:'도덕', faith:'신앙',
+                combat:'전투', magic:'마법', cooking:'요리', housework:'가사',
+              }
+              return (
+                <span key={stat} className={cn(
+                  "px-1.5 py-0.5 rounded-full font-medium",
+                  (val ?? 0) > 0 ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                )}>
+                  {statShort[stat]} {(val ?? 0) > 0 ? '+' : ''}{val}
+                  <span className="opacity-60 ml-0.5">(대성공 ×2)</span>
+                </span>
+              )
+            })}
+            {selectedActivity.stressChange !== 0 && (
+              <span className={cn(
+                "px-1.5 py-0.5 rounded-full font-medium",
+                selectedActivity.stressChange < 0 ? "bg-blue-100 text-blue-700" : "bg-orange-100 text-orange-700"
+              )}>
+                😰 스트레스 {selectedActivity.stressChange > 0 ? '+' : ''}{selectedActivity.stressChange}
+              </span>
+            )}
+            {selectedActivity.goldChange !== 0 && (
+              <span className={cn(
+                "px-1.5 py-0.5 rounded-full font-medium",
+                selectedActivity.goldChange > 0 ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700"
+              )}>
+                🪙 {selectedActivity.goldChange > 0 ? '+' : ''}{selectedActivity.goldChange}G
+              </span>
+            )}
+            {selectedActivity.requirements && (
+              <>
+                <span className="text-muted-foreground font-medium ml-1">|  필요:</span>
+                {Object.entries(selectedActivity.requirements).map(([stat, val]) => {
+                  const statShort: Record<string, string> = {
+                    strength:'체력', intelligence:'지능', charm:'매력',
+                    creativity:'예술', morality:'도덕', faith:'신앙',
+                    combat:'전투', magic:'마법', cooking:'요리', housework:'가사',
+                  }
+                  const meets = (character.stats[stat as keyof typeof character.stats] || 0) >= (val || 0)
+                  return (
+                    <span key={stat} className={cn(
+                      "px-1.5 py-0.5 rounded-full border font-medium",
+                      meets ? "border-green-300 text-green-600 bg-green-50" : "border-red-300 text-red-600 bg-red-50"
+                    )}>
+                      {meets ? '✓' : '✗'} {statShort[stat] || stat} {val}
+                    </span>
+                  )
+                })}
+              </>
+            )}
+          </div>
         </div>
       ) : (
         <div className="text-xs text-muted-foreground px-1">
@@ -303,6 +384,60 @@ export function SchedulePanel() {
         })}
       </div>
 
+      {/* 전체 채우기 버튼 */}
+      {selectedActivity && (
+        <Button variant="outline" size="sm" className="w-full text-xs"
+          onClick={() => {
+            const filled = weekSchedule.map((s, i) =>
+              s === null && !isBirthdaySlot(i) ? selectedActivity.id : s
+            )
+            setWeekSchedule(filled)
+          }}>
+          📋 빈 칸 전부 "{selectedActivity.name}"으로 채우기
+        </Button>
+      )}
+
+      {/* 예상 결과 요약 */}
+      {filledCount > 0 && (() => {
+        let totalGold = 0, totalStress = 0
+        const statSums: Record<string, number> = {}
+        const statShort: Record<string, string> = {
+          strength:'💪체', intelligence:'📚지', charm:'✨매', creativity:'🎨예',
+          morality:'🌿도', faith:'🙏신', combat:'⚔전', magic:'🔮마',
+          cooking:'🍳요', housework:'🏠가',
+        }
+        weekSchedule.forEach((id, i) => {
+          if (!id || isBirthdaySlot(i)) return
+          const act = ACTIVITIES.find(a => a.id === id)
+          if (!act) return
+          totalGold += act.goldChange
+          totalStress += act.stressChange
+          Object.entries(act.statChanges).forEach(([s, v]) => {
+            statSums[s] = (statSums[s] || 0) + (v || 0)
+          })
+        })
+        return (
+          <div className="px-3 py-2 bg-muted/30 rounded-lg border border-border text-xs flex flex-wrap gap-2 items-center">
+            <span className="font-medium text-muted-foreground">이번 주 예상:</span>
+            {totalGold !== 0 && (
+              <span className={totalGold > 0 ? "text-amber-600 font-medium" : "text-red-500"}>
+                🪙 {totalGold > 0 ? "+" : ""}{totalGold}G
+              </span>
+            )}
+            {totalStress !== 0 && (
+              <span className={totalStress < 0 ? "text-blue-600 font-medium" : "text-orange-500"}>
+                😰 스트레스 {totalStress > 0 ? "+" : ""}{totalStress}
+              </span>
+            )}
+            {Object.entries(statSums).filter(([,v]) => v !== 0).map(([s, v]) => (
+              <span key={s} className={v > 0 ? "text-green-700 font-medium" : "text-red-500"}>
+                {statShort[s] || s} {v > 0 ? "+" : ""}{v}
+              </span>
+            ))}
+          </div>
+        )
+      })()}
+
       {/* 실행 버튼 */}
       <Button
         className="w-full"
@@ -333,24 +468,29 @@ export function SchedulePanel() {
               <TabsContent key={cat} value={cat} className="mt-0">
                 <ScrollArea className="h-[200px]">
                   <div className="grid grid-cols-2 gap-2 pr-2">
-                    {ACTIVITIES.filter(a => a.category === cat).map(activity => (
+                    {ACTIVITIES.filter(a => a.category === cat && a.id !== 'dungeon-explore').map(activity => (
                       <button
                         key={activity.id}
-                        onClick={() => setSelectedActivity(
-                          selectedActivity?.id === activity.id ? null : activity
-                        )}
+                        disabled={!isActivityAvailable(activity)}
+                        onClick={() => {
+                          if (!isActivityAvailable(activity)) return
+                          setSelectedActivity(selectedActivity?.id === activity.id ? null : activity)
+                        }}
                         className={cn(
-                          "flex items-center gap-2 p-2 rounded-lg border text-left transition-all text-sm",
-                          selectedActivity?.id === activity.id
+                          "flex items-start gap-2 p-3 rounded-lg border text-left transition-all",
+                          !isActivityAvailable(activity)
+                            ? "opacity-40 cursor-not-allowed border-muted bg-muted/10"
+                            : selectedActivity?.id === activity.id
                             ? "border-primary bg-primary/10 shadow-sm"
                             : "border-border hover:border-primary/50 hover:bg-muted/50"
                         )}
                       >
-                        <span className="text-xl flex-shrink-0">{activity.icon}</span>
-                        <div className="min-w-0">
-                          <div className="font-medium truncate text-xs">{activity.name}</div>
-                          <div className="flex gap-1 flex-wrap mt-0.5">
-                            {Object.entries(activity.statChanges).slice(0, 2).map(([stat, val]) => {
+                        <span className="text-xl flex-shrink-0 mt-0.5">{activity.icon}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-xs">{activity.name}</div>
+                          <div className="flex gap-1 flex-wrap mt-1">
+                            {/* 모든 스탯 변화 */}
+                            {Object.entries(activity.statChanges).map(([stat, val]) => {
                               const statShort: Record<string, string> = {
                                 strength:'체력', intelligence:'지능', charm:'매력',
                                 creativity:'예술', morality:'도덕', faith:'신앙',
@@ -358,22 +498,53 @@ export function SchedulePanel() {
                               }
                               return (
                                 <span key={stat} className={cn(
-                                  "text-[10px] px-1 rounded-full",
+                                  "text-[10px] px-1.5 py-0.5 rounded-full font-medium",
                                   (val ?? 0) > 0 ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
                                 )}>
                                   {statShort[stat]} {(val ?? 0) > 0 ? '+' : ''}{val}
                                 </span>
                               )
                             })}
+                            {/* 스트레스 */}
+                            {activity.stressChange !== 0 && (
+                              <span className={cn(
+                                "text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                                activity.stressChange < 0 ? "bg-blue-100 text-blue-700" : "bg-orange-100 text-orange-700"
+                              )}>
+                                스트레스 {activity.stressChange > 0 ? '+' : ''}{activity.stressChange}
+                              </span>
+                            )}
+                            {/* 골드 */}
                             {activity.goldChange !== 0 && (
                               <span className={cn(
-                                "text-[10px] px-1 rounded-full",
+                                "text-[10px] px-1.5 py-0.5 rounded-full font-medium",
                                 activity.goldChange > 0 ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700"
                               )}>
                                 {activity.goldChange > 0 ? '+' : ''}{activity.goldChange}G
                               </span>
                             )}
                           </div>
+                          {/* 필요 조건 */}
+                          {activity.requirements && (
+                            <div className="mt-1 flex gap-1 flex-wrap">
+                              {Object.entries(activity.requirements).map(([stat, val]) => {
+                                const statShort: Record<string, string> = {
+                                  strength:'체력', intelligence:'지능', charm:'매력',
+                                  creativity:'예술', morality:'도덕', faith:'신앙',
+                                  combat:'전투', magic:'마법', cooking:'요리', housework:'가사',
+                                }
+                                const meets = (character.stats[stat as keyof typeof character.stats] || 0) >= (val || 0)
+                                return (
+                                  <span key={stat} className={cn(
+                                    "text-[10px] px-1.5 py-0.5 rounded-full border font-medium",
+                                    meets ? "border-green-300 text-green-600" : "border-red-300 text-red-600"
+                                  )}>
+                                    {meets ? '✓' : '✗'} {statShort[stat] || stat} {val}
+                                  </span>
+                                )
+                              })}
+                            </div>
+                          )}
                         </div>
                       </button>
                     ))}

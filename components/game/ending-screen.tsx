@@ -97,7 +97,7 @@ export function EndingScreen() {
           
           <div className="flex justify-center gap-3">
             <Button size="lg" onClick={resetGame} className="px-8">
-              다시 시작하기
+              🏠 타이틀로
             </Button>
             <Button size="lg" variant="outline" onClick={() => setScreen("ending-book")} className="px-8">
               엔딩 도감

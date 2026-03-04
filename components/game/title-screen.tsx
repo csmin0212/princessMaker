@@ -1,37 +1,24 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { useGameStore, SaveSlot } from "@/lib/game-store"
+import { useState } from "react"
+import { useGameStore } from "@/lib/game-store"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
-import { cn } from "@/lib/utils"
 
 export function TitleScreen() {
-  const { setScreen, getSaveSlots, loadGame, deleteSave, unlockedEndings } = useGameStore()
-  const [slots, setSlots] = useState<SaveSlot[]>([])
-  const [showLoad, setShowLoad] = useState(false)
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
-  const [loadMsg, setLoadMsg] = useState<string | null>(null)
+  const { setScreen, resetGame, gameStarted, unlockedEndings, getSaveSlots, loadGame, deleteSave } = useGameStore()
+  const [showLoadModal, setShowLoadModal] = useState(false)
 
-  useEffect(() => {
-    setSlots(getSaveSlots())
-  }, [showLoad])
+  const saveSlots = getSaveSlots()
 
-  const handleLoad = (key: string) => {
-    const ok = loadGame(key)
-    if (!ok) setLoadMsg("불러오기에 실패했습니다.")
-  }
-
-  const handleDelete = (key: string) => {
-    deleteSave(key)
-    setSlots(getSaveSlots())
-    setDeleteConfirm(null)
+  const handleLoad = (slotKey: string) => {
+    const ok = loadGame(slotKey)
+    if (ok) setShowLoadModal(false)
   }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background via-muted/30 to-background flex items-center justify-center p-4">
-      <div className="max-w-sm w-full space-y-8">
+      <div className="max-w-lg w-full space-y-8">
 
         {/* Title */}
         <div className="text-center space-y-4">
@@ -42,115 +29,84 @@ export function TitleScreen() {
           <p className="text-lg text-muted-foreground">
             당신의 선택이 아이의 미래를 결정합니다
           </p>
-          {unlockedEndings.length > 0 && (
-            <p className="text-sm text-primary/70">
-              📖 엔딩 {unlockedEndings.length}개 수집됨
-            </p>
-          )}
         </div>
 
-        {/* Buttons */}
+        {/* 버튼 카드 */}
         <Card className="border-2 border-primary/20 shadow-lg">
-          <CardContent className="p-6 space-y-3">
+          <CardContent className="space-y-3 pt-6">
+            {/* 진행 중인 게임 이어하기 */}
+            {gameStarted && (
+              <Button size="lg" onClick={() => setScreen("game")} className="w-full">
+                🌸 이어하기
+              </Button>
+            )}
+            {/* 게임 시작 (새 게임) */}
             <Button
               size="lg"
-              onClick={() => setScreen("character-creation")}
+              variant={gameStarted ? "outline" : "default"}
+              onClick={() => { resetGame(); setScreen("character-creation") }}
               className="w-full"
             >
-              🌱 새 게임
+              ✨ 게임 시작
             </Button>
-
+            {/* 불러오기 */}
             <Button
               size="lg"
               variant="outline"
-              onClick={() => setShowLoad(true)}
+              onClick={() => setShowLoadModal(true)}
               className="w-full"
+              disabled={saveSlots.length === 0}
             >
-              💾 불러오기
+              💾 불러오기 {saveSlots.length > 0 ? `(${saveSlots.length}개)` : "(없음)"}
             </Button>
-
+            {/* 엔딩 도감 */}
             <Button
               size="lg"
               variant="outline"
               onClick={() => setScreen("ending-book")}
               className="w-full"
+              disabled={unlockedEndings.length === 0}
             >
-              📖 엔딩 도감
+              📖 엔딩 도감 {unlockedEndings.length > 0 ? `(${unlockedEndings.length}개 달성)` : "(미달성)"}
             </Button>
           </CardContent>
         </Card>
+
       </div>
 
-      {/* 불러오기 다이얼로그 */}
-      <Dialog open={showLoad} onOpenChange={setShowLoad}>
-        <DialogContent className="max-w-md">
-          <DialogTitle className="font-serif text-lg">💾 저장 파일 불러오기</DialogTitle>
-          <DialogDescription className="text-sm text-muted-foreground">
-            이어서 플레이할 저장 파일을 선택하세요
-          </DialogDescription>
-
-          {loadMsg && (
-            <p className="text-sm text-red-500">{loadMsg}</p>
-          )}
-
-          {slots.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <div className="text-4xl mb-2">📭</div>
-              <p>저장된 파일이 없습니다</p>
-            </div>
-          ) : (
-            <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
-              {slots.map(slot => (
-                <div
-                  key={slot.key}
-                  className="flex items-center gap-3 p-3 rounded-lg border hover:border-primary/50 hover:bg-muted/30 transition-all"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate">{slot.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {slot.characterName} · {slot.age}세 · {slot.year}년 {slot.month}월
+      {/* 불러오기 모달 */}
+      {showLoadModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-md border-2">
+            <CardContent className="p-6 space-y-4">
+              <h2 className="text-lg font-serif font-bold">💾 저장 슬롯 선택</h2>
+              {saveSlots.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">저장된 게임이 없습니다.</p>
+              ) : (
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                  {saveSlots.map(slot => (
+                    <div key={slot.key} className="flex items-center gap-2 p-3 rounded-lg border hover:bg-muted/50">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-sm">{slot.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {slot.characterName} · {slot.age}세 · {slot.year}년차 {slot.month}월
+                        </p>
+                        <p className="text-xs text-muted-foreground">{slot.savedAt}</p>
+                      </div>
+                      <Button size="sm" onClick={() => handleLoad(slot.key)}>불러오기</Button>
+                      <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive"
+                        onClick={() => deleteSave(slot.key)}>
+                        🗑
+                      </Button>
                     </div>
-                    <div className="text-xs text-muted-foreground/60">{slot.savedAt}</div>
-                  </div>
-                  <div className="flex gap-1 flex-shrink-0">
-                    <Button size="sm" onClick={() => handleLoad(slot.key)}>
-                      불러오기
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-muted-foreground hover:text-red-500"
-                      onClick={() => setDeleteConfirm(slot.key)}
-                    >
-                      🗑
-                    </Button>
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* 삭제 확인 다이얼로그 */}
-      <Dialog open={!!deleteConfirm} onOpenChange={() => setDeleteConfirm(null)}>
-        <DialogContent className="max-w-xs">
-          <DialogTitle>저장 파일 삭제</DialogTitle>
-          <DialogDescription>이 저장 파일을 삭제하시겠습니까? 되돌릴 수 없습니다.</DialogDescription>
-          <div className="flex gap-2 mt-2">
-            <Button variant="outline" className="flex-1" onClick={() => setDeleteConfirm(null)}>
-              취소
-            </Button>
-            <Button
-              variant="destructive"
-              className="flex-1"
-              onClick={() => deleteConfirm && handleDelete(deleteConfirm)}
-            >
-              삭제
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+              )}
+              <Button variant="outline" className="w-full" onClick={() => setShowLoadModal(false)}>닫기</Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   )
 }
