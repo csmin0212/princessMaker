@@ -39,7 +39,7 @@ function getSeason(month: number) {
 export function ShopScreen() {
   const {
     gold, buyItem, buyWeapon, buyOutfit, buyAccessory,
-    character, setScreen, month, year,
+    character, setScreen, month, year, getPerksEffect,
     seasonalShopOutfits, seasonalShopWeapons, seasonalShopAccessories,
     _updateSeasonalShop,
   } = useGameStore()
@@ -61,7 +61,7 @@ export function ShopScreen() {
     id: string; name: string; icon: string; description?: string
     price?: number; rarity?: string; owned?: boolean; onBuy: () => void; seasonal?: boolean
   }) {
-    const canAfford = !price || gold >= price
+    const canAfford = !price || gold >= discountedPrice(price)
     return (
       <Card className={cn(
         "border-2 transition-all",
@@ -82,7 +82,15 @@ export function ShopScreen() {
             {description && <p className="text-xs text-muted-foreground mt-0.5">{description}</p>}
           </div>
           <div className="text-right flex-shrink-0">
-            {price && <div className="text-sm font-bold text-amber-600 mb-1">🪙 {price}G</div>}
+            {price && (
+              <div className="text-sm font-bold mb-1">
+                {hasThrifty ? (
+                  <span className="text-green-600">🪙 {discountedPrice(price)}G <span className="text-xs line-through text-muted-foreground">{price}G</span></span>
+                ) : (
+                  <span className="text-amber-600">🪙 {price}G</span>
+                )}
+              </div>
+            )}
             <Button size="sm" disabled={owned || !canAfford} onClick={onBuy} className="h-7 text-xs px-3">
               {owned ? "보유" : !canAfford ? "부족" : "구매"}
             </Button>
@@ -93,6 +101,8 @@ export function ShopScreen() {
   }
 
   const season = getSeason(month)
+  const hasThrifty = character.unlockedPerks.includes('thrifty')
+  const discountedPrice = (price: number) => hasThrifty ? Math.floor(price * 0.9) : price
   const seasonName = seasonLabel[season]
   const seasonIco  = seasonIcon[season]
 

@@ -260,7 +260,7 @@ export function SchedulePanel() {
 
       {/* 활동 선택 팁 */}
       {selectedActivity ? (
-        <div className="flex flex-col gap-2 px-3 py-2 bg-primary/10 rounded-lg border border-primary/30 text-sm">
+        <div className="flex flex-col gap-1.5 px-3 py-2 bg-primary/10 rounded-lg border border-primary/30 text-sm">
           <div className="flex items-center gap-2">
             <span className="text-xl">{selectedActivity.icon}</span>
             <span className="font-medium text-primary">{selectedActivity.name}</span>
@@ -269,61 +269,25 @@ export function SchedulePanel() {
               취소
             </Button>
           </div>
-          {/* 예상 수련 결과 */}
-          <div className="flex flex-wrap gap-1.5 text-xs">
-            <span className="text-muted-foreground font-medium">수련 결과 예상:</span>
+          <div className="flex flex-wrap gap-1 text-xs">
             {Object.entries(selectedActivity.statChanges).map(([stat, val]) => {
-              const statShort: Record<string, string> = {
-                strength:'체력', intelligence:'지능', charm:'매력',
-                creativity:'예술', morality:'도덕', faith:'신앙',
-                combat:'전투', magic:'마법', cooking:'요리', housework:'가사',
-              }
-              return (
-                <span key={stat} className={cn(
-                  "px-1.5 py-0.5 rounded-full font-medium",
-                  (val ?? 0) > 0 ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-                )}>
-                  {statShort[stat]} {(val ?? 0) > 0 ? '+' : ''}{val}
-                  <span className="opacity-60 ml-0.5">(대성공 ×2)</span>
-                </span>
-              )
+              const nm: Record<string,string> = { strength:'체력',intelligence:'지능',charm:'매력',creativity:'예술',morality:'도덕',faith:'신앙',combat:'전투',magic:'마법',cooking:'요리',housework:'가사' }
+              return <span key={stat} className={cn("px-1.5 py-0.5 rounded-full font-medium", (val??0)>0?"bg-green-100 text-green-700":"bg-red-100 text-red-700")}>{nm[stat]} {(val??0)>0?'+':''}{val}<span className="opacity-60 ml-0.5">(대성공×2)</span></span>
             })}
             {selectedActivity.stressChange !== 0 && (
-              <span className={cn(
-                "px-1.5 py-0.5 rounded-full font-medium",
-                selectedActivity.stressChange < 0 ? "bg-blue-100 text-blue-700" : "bg-orange-100 text-orange-700"
-              )}>
-                😰 스트레스 {selectedActivity.stressChange > 0 ? '+' : ''}{selectedActivity.stressChange}
+              <span className={cn("px-1.5 py-0.5 rounded-full font-medium", selectedActivity.stressChange<0?"bg-blue-100 text-blue-700":"bg-orange-100 text-orange-700")}>
+                😰 스트레스 {selectedActivity.stressChange>0?'+':''}{selectedActivity.stressChange}
               </span>
             )}
             {selectedActivity.goldChange !== 0 && (
-              <span className={cn(
-                "px-1.5 py-0.5 rounded-full font-medium",
-                selectedActivity.goldChange > 0 ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700"
-              )}>
-                🪙 {selectedActivity.goldChange > 0 ? '+' : ''}{selectedActivity.goldChange}G
+              <span className={cn("px-1.5 py-0.5 rounded-full font-medium", selectedActivity.goldChange>0?"bg-yellow-100 text-yellow-700":"bg-red-100 text-red-700")}>
+                🪙 {selectedActivity.goldChange>0?'+':''}{selectedActivity.goldChange}G
               </span>
             )}
-            {selectedActivity.requirements && (
-              <>
-                <span className="text-muted-foreground font-medium ml-1">|  필요:</span>
-                {Object.entries(selectedActivity.requirements).map(([stat, val]) => {
-                  const statShort: Record<string, string> = {
-                    strength:'체력', intelligence:'지능', charm:'매력',
-                    creativity:'예술', morality:'도덕', faith:'신앙',
-                    combat:'전투', magic:'마법', cooking:'요리', housework:'가사',
-                  }
-                  const meets = (character.stats[stat as keyof typeof character.stats] || 0) >= (val || 0)
-                  return (
-                    <span key={stat} className={cn(
-                      "px-1.5 py-0.5 rounded-full border font-medium",
-                      meets ? "border-green-300 text-green-600 bg-green-50" : "border-red-300 text-red-600 bg-red-50"
-                    )}>
-                      {meets ? '✓' : '✗'} {statShort[stat] || stat} {val}
-                    </span>
-                  )
-                })}
-              </>
+            {(selectedActivity as any).healthChange && (selectedActivity as any).healthChange !== 0 && (
+              <span className="px-1.5 py-0.5 rounded-full font-medium bg-rose-100 text-rose-700">
+                ❤️ 건강 {(selectedActivity as any).healthChange>0?'+':''}{(selectedActivity as any).healthChange}
+              </span>
             )}
           </div>
         </div>
@@ -438,6 +402,20 @@ export function SchedulePanel() {
         )
       })()}
 
+      {/* 건강 경고 */}
+      {character.health <= character.maxHealth * 0.25 && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-red-50 border border-red-300 rounded-lg text-red-700 text-xs font-medium">
+          <span>🚨</span>
+          <span>건강 위험 (25% 이하) — 모든 활동 실패 확률 <strong>+30%</strong></span>
+        </div>
+      )}
+      {character.health > character.maxHealth * 0.25 && character.health <= character.maxHealth * 0.5 && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-orange-50 border border-orange-300 rounded-lg text-orange-700 text-xs font-medium">
+          <span>⚠️</span>
+          <span>건강 저하 (50% 이하) — 모든 활동 실패 확률 <strong>+20%</strong></span>
+        </div>
+      )}
+
       {/* 실행 버튼 */}
       <Button
         className="w-full"
@@ -468,7 +446,7 @@ export function SchedulePanel() {
               <TabsContent key={cat} value={cat} className="mt-0">
                 <ScrollArea className="h-[200px]">
                   <div className="grid grid-cols-2 gap-2 pr-2">
-                    {ACTIVITIES.filter(a => a.category === cat && a.id !== 'dungeon-explore').map(activity => (
+                    {ACTIVITIES.filter(a => a.category === cat).map(activity => (
                       <button
                         key={activity.id}
                         disabled={!isActivityAvailable(activity)}
@@ -521,6 +499,15 @@ export function SchedulePanel() {
                                 activity.goldChange > 0 ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700"
                               )}>
                                 {activity.goldChange > 0 ? '+' : ''}{activity.goldChange}G
+                              </span>
+                            )}
+                            {/* 건강 변화 */}
+                            {(activity as any).healthChange && (activity as any).healthChange !== 0 && (
+                              <span className={cn(
+                                "text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                                (activity as any).healthChange > 0 ? "bg-rose-100 text-rose-700" : "bg-red-100 text-red-700"
+                              )}>
+                                ❤️ {(activity as any).healthChange > 0 ? '+' : ''}{(activity as any).healthChange}
                               </span>
                             )}
                           </div>

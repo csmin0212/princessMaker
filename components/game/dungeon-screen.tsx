@@ -30,10 +30,13 @@ export function DungeonScreen() {
   const usedCount = dungeon.usedPotions.length
   const totalSlots = dungeon.potionSlots.length
 
-  const meetsReq = (req?: Partial<Stats> & { worldKnowledge?: number }) => {
+  const meetsReq = (req?: Partial<Stats> & { worldKnowledge?: number; flag?: string; equippedOutfit?: string; notFlag?: string }) => {
     if (!req) return true
     for (const [k, v] of Object.entries(req)) {
       if (k === "worldKnowledge") { if (character.worldKnowledge < (v||0)) return false }
+      else if (k === "flag") { if (!character.storyFlags?.includes(v as string)) return false }
+      else if (k === "notFlag") { if (character.storyFlags?.includes(v as string)) return false }
+      else if (k === "equippedOutfit") { if (character.currentOutfit !== (v as string)) return false }
       else if ((character.stats[k as keyof Stats]||0) < (v||0)) return false
     }
     return true

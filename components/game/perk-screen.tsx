@@ -222,11 +222,9 @@ export function PerkScreen() {
           </TabsList>
 
           <TabsContent value="combat">
-            <p className="text-sm text-muted-foreground mb-4">🗡️ 던전 전투에 특화된 특성. Tier3 습득 시 강력한 시너지 효과.</p>
             {renderTree("combat")}
           </TabsContent>
           <TabsContent value="life">
-            <p className="text-sm text-muted-foreground mb-4">🌱 생활·수입·성장에 특화된 특성. Tier3는 특화 빌드의 정점.</p>
             {renderTree("life")}
           </TabsContent>
         </Tabs>

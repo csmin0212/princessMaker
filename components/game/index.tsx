@@ -16,8 +16,11 @@ import { WardrobeScreen } from "./wardrobe-screen"
 import { EndingSelectScreen } from "./ending-select-screen"
 import { DungeonSelectScreen } from "./dungeon-select-screen"
 import { DungeonPrepScreen } from "./dungeon-prep-screen"
+import { NpcScreen } from "./npc-screen"
+import { DungeonResultScreen } from "./dungeon-result-screen"
 import { CraftScreen } from "./craft-screen"
 import { PerkScreen } from "./perk-screen"
+import { SettingsScreen } from "./settings-screen"
 import { EventResultModal } from "./event-result-modal"
 
 export function Game() {
@@ -56,6 +59,12 @@ export function Game() {
             return <PerkScreen />
           case "dungeon":
             return <DungeonScreen />
+          case "dungeon-result":
+            return <DungeonResultScreen />
+          case "npc":
+            return <NpcScreen />
+          case "settings":
+            return <SettingsScreen />
           case "seasonal":
             return <SeasonalEventScreen />
           case "talk":

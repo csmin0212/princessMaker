@@ -49,11 +49,7 @@ export function CharacterPanel() {
           <span className="text-base">{season.icon}</span>
           <span className="text-muted-foreground/70">{season.name}</span>
         </div>
-        {dungeon.maxFloorReached > 0 && (
-          <div className="text-xs text-cyan-600 mt-1">
-            던전 최고기록: {dungeon.maxFloorReached}층
-          </div>
-        )}
+
       </CardHeader>
       
       <CardContent className="space-y-4">

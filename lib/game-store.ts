@@ -61,7 +61,7 @@ export interface Recipe {
   name: string
   description: string
   icon: string
-  resultType: "item" | "weapon" | "outfit"
+  resultType: "item" | "weapon" | "outfit" | "accessory"
   resultId: string
   resultQuantity: number
   ingredients: { id: string; quantity: number }[]  // item or material id
@@ -166,6 +166,11 @@ export interface Character {
   equippedAccessories: string[]  // 최대 2개
   ownedAccessories: string[]
   materials: { id: string; quantity: number }[]
+  npcAffection: Record<string, number>   // npcId → 호감도 0~100
+  npcMet: string[]                       // 만난 NPC id 목록
+  npcTalkedToday: string[]               // 오늘 이미 대화한 NPC (매주 초기화)
+  romancedNpc: string | null             // 로맨스 성사된 NPC id
+  storyFlags: string[]                   // 스토리 플래그 (met-goddess, met-demonking, defeated-demonking 등)
   level: number           // 1~10
   xp: number              // 현재 누적 경험치
   perkPoints: number      // 사용 가능한 특성 포인트
@@ -232,6 +237,8 @@ export interface AdventureEvent {
 export interface SeasonalEvent {
   id: string
   season: "spring" | "summer" | "fall" | "winter"
+  minYear?: number   // 최소 발생 연차 (없으면 제한 없음)
+  maxYear?: number   // 최대 발생 연차
   title: string
   description: string
   choices: {
@@ -275,7 +282,7 @@ export interface DungeonEncounter {
   floorRange: [number, number]
   choices?: {
     text: string
-    requirements?: Partial<Stats> & { worldKnowledge?: number }
+    requirements?: Partial<Stats> & { worldKnowledge?: number; flag?: string; equippedOutfit?: string; notFlag?: string }
     outcomes: {
       description: string
       statChanges?: Partial<Stats>
@@ -285,6 +292,9 @@ export interface DungeonEncounter {
       endDungeon?: boolean
       nextFloor?: boolean
       outfitReward?: string
+      startCombat?: string        // 적 id → 즉시 전투 시작
+      setFlag?: string            // 스토리 플래그 설정
+      specialItem?: string        // 특수 아이템 지급 (인벤토리)
     }
   }[]
 }
@@ -329,6 +339,10 @@ export interface Ending {
     minGold?: number
     worldKnowledge?: number
     dungeonFloor?: number
+    romancedNpc?: string
+    morality?: { max?: number; min?: number }
+    storyFlag?: string         // 스토리 플래그 필요
+    hasItem?: string           // 특정 아이템 보유
   }
   priority: number
   image: string
@@ -355,6 +369,9 @@ export type GameScreen =
   | "dungeon-prep"
   | "craft"
   | "perk"
+  | "dungeon-result"
+  | "npc"
+  | "settings"
 
 // 세이브 슬롯
 export interface SaveSlot {
@@ -383,6 +400,7 @@ export type DayResult = {
 
 interface GameState {
   screen: GameScreen
+  prevScreen: GameScreen
   character: Character
   gold: number
   year: number
@@ -420,6 +438,7 @@ interface GameState {
   useItem: (itemId: string) => boolean
   advanceTime: () => void
   checkEnding: () => Ending | null
+  debugJumpTo: (year: number, month: number, week: number) => void
   getQualifiedEndings: () => Ending[]
   viewEnding: (endingId: string) => void
   setWeekSchedule: (schedule: (string | null)[]) => void
@@ -449,6 +468,12 @@ interface GameState {
   resetPerks: () => boolean
   getPerksEffect: () => { attackBonus: number; magicBonus: number; goldMultiplier: number; potionBonus: number; maxPotionSlots: number; hpBonus: number; xpBonus: number; stressReduce: number; activityBonus: number; craftSaveChance: number; goldDungeonBonus: number; defenseBonus: number; critChance: number; critMultiplier: number }
   getAccessoriesEffect: () => { attackBonus: number; magicBonus: number; hpBonus: number; critChance: number; defenseBonus: number; goldMultiplier: number; stressReduce: number; xpBonus: number }
+  // NPC
+  talkToNpc: (npcId: string) => void
+  giftToNpc: (npcId: string, itemId: string) => void
+  dateNpc: (npcId: string) => void
+  romanceNpc: (npcId: string) => void
+  getMetNpcs: () => NPC[]
   addLog: (message: string) => void
   addOutfit: (outfitId: string) => void
   changeOutfit: (outfitId: string) => void
@@ -511,30 +536,29 @@ export const PERSONALITIES: Personality[] = [
 export const OUTFITS: Outfit[] = [
   { id: "default", name: "평상복", description: "편안하고 깔끔한 일상복", icon: "\u{1F457}", category: "daily", rarity: "common", obtainMethod: "기본 지급" },
   { id: "apron", name: "앞치마 복장", description: "일할 때 입는 실용적인 복장", icon: "\u{1F45A}", category: "daily", rarity: "common", obtainMethod: "상점 구매 (50G)", price: 50 },
-  { id: "scholar", name: "학자 로브", description: "학문을 연구할 때 입는 로브", icon: "\u{1F97C}", category: "formal", rarity: "uncommon", statBonuses: { intelligence: 3, magic: 2 }, obtainMethod: "상점 구매 (150G)", price: 150 },
-  { id: "knight", name: "견습 기사복", description: "전투 훈련용 갑옷", icon: "\u{1F6E1}\uFE0F", category: "combat", rarity: "uncommon", statBonuses: { combat: 3, strength: 2 }, obtainMethod: "상점 구매 (200G)", price: 200 },
-  { id: "party-dress", name: "파티 드레스", description: "화려한 정장 드레스", icon: "\u{1F458}", category: "formal", rarity: "uncommon", statBonuses: { charm: 5 }, obtainMethod: "상점 구매 (180G)", price: 180 },
-  { id: "priestess", name: "신녀 복장", description: "신성한 의식용 복장", icon: "\u{1F4FF}", category: "formal", rarity: "rare", statBonuses: { faith: 5, morality: 3 }, obtainMethod: "동지 축제 이벤트" },
-  { id: "chef", name: "요리사 복장", description: "전문 요리사의 복장", icon: "\u{1F468}\u200D\u{1F373}", category: "daily", rarity: "uncommon", statBonuses: { cooking: 5 }, obtainMethod: "수확제 요리 대회 우승" },
-  { id: "flower-crown", name: "꽃의 여왕 드레스", description: "봄 축제 여왕의 특별한 드레스", icon: "\u{1F338}", category: "special", rarity: "rare", statBonuses: { charm: 8, creativity: 3 }, obtainMethod: "꽃축제 꽃꽂이 대회 우승" },
+  { id: "scholar", name: "학자 로브", description: "학문을 연구할 때 입는 로브", icon: "\u{1F97C}", category: "formal", rarity: "uncommon", statBonuses: { intelligence: 3, magic: 2, hpBonus: 30}, obtainMethod: "상점 구매 (150G)", price: 150 },
+  { id: "knight", name: "견습 기사복", description: "전투 훈련용 갑옷", icon: "\u{1F6E1}\uFE0F", category: "combat", rarity: "uncommon", statBonuses: { combat: 3, strength: 2, hpBonus: 30}, obtainMethod: "상점 구매 (200G)", price: 200 },
+  { id: "party-dress", name: "파티 드레스", description: "화려한 정장 드레스", icon: "\u{1F458}", category: "formal", rarity: "uncommon", statBonuses: { charm: 5, hpBonus: 80}, obtainMethod: "상점 구매 (180G)", price: 180 },
+  { id: "priestess", name: "신녀 복장", description: "신성한 의식용 복장", icon: "\u{1F4FF}", category: "formal", rarity: "rare", statBonuses: { faith: 5, morality: 3, hpBonus: 40}, obtainMethod: "동지 축제 이벤트" },
+  { id: "chef", name: "요리사 복장", description: "전문 요리사의 복장", icon: "\u{1F468}\u200D\u{1F373}", category: "daily", rarity: "uncommon", statBonuses: { cooking: 5, hpBonus: 50}, obtainMethod: "수확제 요리 대회 우승" },
+  { id: "flower-crown", name: "꽃의 여왕 드레스", description: "봄 축제 여왕의 특별한 드레스", icon: "\u{1F338}", category: "special", rarity: "rare", statBonuses: { charm: 8, creativity: 3, hpBonus: 30}, obtainMethod: "꽃축제 꽃꽂이 대회 우승" },
   { id: "swimsuit", name: "해변 원피스", description: "시원하고 경쾌한 여름 복장", icon: "\u{1F459}", category: "daily", rarity: "uncommon", obtainMethod: "바다 축제 수영 대회 우승" },
-  { id: "witch", name: "마녀 로브", description: "신비로운 마법사의 로브", icon: "\u{1F9D9}\u200D\u2640\uFE0F", category: "special", rarity: "rare", statBonuses: { magic: 8, intelligence: 3 }, obtainMethod: "던전 마녀의 방 클리어" },
-  { id: "holy-knight", name: "성기사 갑옷", description: "세계의 끝 던전에서 여신의 현현을 만나 경배할 때 획득", icon: "\u2694\uFE0F", category: "combat", rarity: "legendary", statBonuses: { combat: 8, faith: 5, morality: 3 }, obtainMethod: "세계의 끝 — 여신의 현현" },
-  { id: "dark-knight", name: "암흑 기사 갑옷", description: "무저갱에서 마왕의 그림자를 만나 거래할 때 획득", icon: "\u{1F5A4}", category: "combat", rarity: "legendary", statBonuses: { combat: 10, magic: 5, morality: -5 }, obtainMethod: "무저갱 — 마왕과의 계약" },
-  { id: "celestial", name: "천상의 드레스", description: "세계의 이해도 80%를 달성하면 자동으로 얻는 전설의 드레스", icon: "\u2728", category: "special", rarity: "legendary", statBonuses: { charm: 5, magic: 5, faith: 5, intelligence: 5 }, obtainMethod: "세계의 이해도 80% 달성" },
-  { id: "birthday-dress", name: "생일 드레스", description: "축하의 기운이 깃든 드레스", icon: "\u{1F382}", category: "special", rarity: "rare", statBonuses: { charm: 4, morality: 2 }, obtainMethod: "생일 이벤트" },
-  { id: "dragon-armor", name: "용린 갑옷", description: "드래곤의 비늘로 만든 전설의 갑옷", icon: "\u{1F432}", category: "combat", rarity: "legendary", statBonuses: { combat: 12, strength: 5, magic: 5 }, obtainMethod: "던전 40층 보스 처치" },
-  { id: "void-robe", name: "공허의 로브", description: "심연에서 건져올린 무(無)의 옷", icon: "\u{1F30C}", category: "special", rarity: "legendary", statBonuses: { magic: 12, intelligence: 8, faith: -5 }, obtainMethod: "던전 50층 도달" },
-  // 조합 의상 (Uncommon)
-  { id: "troll-armor",         name: "트롤 갑옷",      description: "두꺼운 트롤 가죽으로 만든 갑옷",   icon: "🟤", category: "special", rarity: "uncommon", statBonuses: { strength: 5, combat: 3 }, obtainMethod: "조합" },
-  { id: "bone-robe",           name: "뼈 로브",         description: "해골 뼈로 장식한 마법사 로브",    icon: "🦴", category: "special", rarity: "uncommon", statBonuses: { magic: 4, intelligence: 3 }, obtainMethod: "조합" },
-  // 조합 의상 (Rare)
-  { id: "frost-cloak",         name: "서리 망토",       description: "서리 결정으로 짠 마법 망토",     icon: "🔷", category: "special", rarity: "rare",     statBonuses: { magic: 8, intelligence: 6, strength: -2 }, obtainMethod: "조합" },
-  { id: "shadow-robe",         name: "그림자 로브",     description: "어둠에 녹아드는 은신 로브",      icon: "🌑", category: "special", rarity: "rare",     statBonuses: { combat: 6, magic: 6, charm: -3 }, obtainMethod: "조합" },
-  { id: "dragon-scale-armor",  name: "용비늘 갑옷",     description: "용의 비늘로 만든 강인한 갑옷",   icon: "🐉", category: "special", rarity: "rare",     statBonuses: { strength: 10, combat: 8, magic: -3 }, obtainMethod: "조합" },
-  // 조합 의상 (Legendary)
-  { id: "divine-vestment",     name: "신성 예복",       description: "여신의 은총이 깃든 성스러운 예복",icon: "🪶", category: "special", rarity: "legendary", statBonuses: { faith: 12, morality: 8, magic: 6 }, obtainMethod: "조합" },
-  { id: "void-robe-crafted",   name: "공허 로브 (조합)",description: "심연의 힘을 담은 전설의 로브",   icon: "⬛", category: "special", rarity: "legendary", statBonuses: { magic: 14, intelligence: 10, faith: -8 }, obtainMethod: "조합" },
+  { id: "witch", name: "마녀 로브", description: "신비로운 마법사의 로브", icon: "\u{1F9D9}\u200D\u2640\uFE0F", category: "special", rarity: "rare", statBonuses: { magic: 8, intelligence: 3, hpBonus: 20}, obtainMethod: "던전 마녀의 방 클리어" },
+  { id: "holy-knight", name: "성기사 갑옷", description: "세계의 끝 던전에서 여신의 현현을 만나 경배할 때 획득", icon: "\u2694\uFE0F", category: "combat", rarity: "legendary", statBonuses: { combat: 8, faith: 5, morality: 3, hpBonus: 60}, obtainMethod: "세계의 끝 — 여신의 현현" },
+  { id: "dark-knight", name: "암흑 기사 갑옷", description: "무저갱에서 마왕의 그림자를 만나 거래할 때 획득", icon: "\u{1F5A4}", category: "combat", rarity: "legendary", statBonuses: { combat: 10, magic: 5, morality: -5, hpBonus: 120}, obtainMethod: "무저갱 — 마왕과의 계약" },
+  { id: "celestial", name: "천상의 드레스", description: "세계의 이해도 80%를 달성하면 자동으로 얻는 전설의 드레스", icon: "\u2728", category: "special", rarity: "legendary", statBonuses: { charm: 5, magic: 5, faith: 5, intelligence: 5, hpBonus: 130}, obtainMethod: "세계의 이해도 80% 달성" },
+  { id: "birthday-dress", name: "생일 드레스", description: "축하의 기운이 깃든 드레스", icon: "\u{1F382}", category: "special", rarity: "rare", statBonuses: { charm: 4, morality: 2, hpBonus: 100}, obtainMethod: "생일 이벤트" },
+  { id: "dragon-armor", name: "용린 갑옷", description: "드래곤의 비늘로 만든 전설의 갑옷", icon: "\u{1F432}", category: "combat", rarity: "legendary", statBonuses: { combat: 12, strength: 5, magic: 5, hpBonus: 50}, obtainMethod: "던전 40층 보스 처치" },
+  { id: "void-robe", name: "공허의 로브", description: "심연에서 건져올린 무(無)의 옷", icon: "\u{1F30C}", category: "special", rarity: "legendary", statBonuses: { magic: 12, intelligence: 8, faith: -5, hpBonus: 160}, obtainMethod: "던전 50층 도달" },
+  // ── 스토리 전용 의상 ─────────────────────────────────────────
+  { id: "demonking-armor",   name: "마왕의 흉갑",    description: "마왕이 하사한 전설의 흉갑. 강력한 어둠의 힘이 깃들어 있다. 여신 앞에 입고 서면...", icon: "👿", category: "combat", rarity: "legendary", statBonuses: { combat: 15, magic: 8, strength: 8, morality: -5, hpBonus: 200}, obtainMethod: "히든 스토리" },
+  // ── 제작 의상 ────────────────────────────────────────────
+  { id: "forest-cloak",    name: "숲의 망토",      description: "변방의 숲 재료로 만든 경량 전투복",     icon: "🧥", category: "combat",  rarity: "uncommon", statBonuses: { combat: 4, strength: 2 },          obtainMethod: "제작" },
+  { id: "frost-robe",      name: "서리 로브",       description: "설원의 마법 에너지를 담은 로브",        icon: "🌨️", category: "formal",  rarity: "rare",     statBonuses: { magic: 6, intelligence: 3, hpBonus: 60},       obtainMethod: "제작" },
+  { id: "bone-armor",      name: "성채 갑옷",       description: "핏빛 성채의 재료로 단조한 중갑옷",      icon: "🛡️", category: "combat",  rarity: "rare",     statBonuses: { combat: 7, strength: 4, hpBonus: 50},          obtainMethod: "제작" },
+  { id: "worldtree-robe",  name: "세계수 드레스",   description: "세계수의 정기가 깃든 신비로운 드레스",   icon: "🌿", category: "special", rarity: "rare",     statBonuses: { magic: 5, creativity: 4, faith: 2, hpBonus: 100}, obtainMethod: "제작" },
+  { id: "holy-robe",       name: "신성한 로브",     description: "신성한 깃털로 짠 여신의 로브",          icon: "🪶", category: "formal",  rarity: "legendary",statBonuses: { faith: 8, morality: 5, magic: 3, hpBonus: 70}, obtainMethod: "제작" },
+  { id: "abyss-armor",     name: "심연의 갑옷",     description: "심연의 핵으로 만든 궁극의 전투복",      icon: "⬛", category: "combat",  rarity: "legendary",statBonuses: { combat: 12, magic: 6, strength: 4, hpBonus: 80}, obtainMethod: "제작" },
 ]
 
 const initialStats: Stats = {
@@ -549,6 +573,11 @@ const initialCharacter: Character = {
   personality: null, currentOutfit: "default", ownedOutfits: ["default"],
   equippedWeapon: null, ownedWeapons: [], equippedAccessories: [], ownedAccessories: [],
   materials: [],
+  npcAffection: {},
+  npcMet: [],
+  npcTalkedToday: [],
+  romancedNpc: null,
+  storyFlags: [],
   level: 1, xp: 0, perkPoints: 0, unlockedPerks: [],
   profileImage: null,
 }
@@ -568,8 +597,8 @@ export const DUNGEONS: DungeonDef[] = [
   { id: "valley",    name: "설원 골짜기", icon: "❄️", description: "얼어붙은 협곡. 한기가 뼛속까지 파고든다.",               floors: 20, theme: "ice",    unlockAfter: "forest" },
   { id: "fortress",  name: "핏빛 성채",   icon: "🏯", description: "피로 물든 고성. 수많은 용병들이 쓰러진 곳.",             floors: 20, theme: "blood",  unlockAfter: "valley" },
   { id: "worldtree", name: "검은 세계수", icon: "🌑", description: "부패한 세계수의 뿌리. 어둠이 깃든 신성한 곳.",           floors: 20, theme: "dark",   unlockAfter: "fortress" },
-  { id: "worldsend", name: "세계의 끝",   icon: "✨", description: "세계가 끝나는 곳. 여신의 발자취가 남아 있다.", worldKnowledgeReward: 30, floors: 20, theme: "divine",  unlockAfter: "worldtree" },
-  { id: "abyss",     name: "무저갱",      icon: "🕳️", description: "끝없이 내려가는 심연. 마왕의 숨결이 느껴진다.", worldKnowledgeReward: 50, floors: 99, theme: "void" },
+  { id: "worldsend", name: "세계의 끝",   icon: "✨", description: "세계가 끝나는 곳. 여신의 발자취가 남아 있다.", worldKnowledgeReward: 30, floors: 30, theme: "divine",  unlockAfter: "worldtree" },
+  { id: "abyss",     name: "무저갱",      icon: "🕳️", description: "끝없이 내려가는 심연. 마왕의 숨결이 느껴진다.", worldKnowledgeReward: 50, floors: 50, theme: "void" },
 ]
 
 // ─── 무기 ───────────────────────────────────────────────────────────────
@@ -599,21 +628,33 @@ export interface Accessory {
 
 export const ACCESSORIES: Accessory[] = [
   // ── 상시 판매 ──────────────────────────────────────────────
-  { id: "leather-bracelet", name: "가죽 팔찌",   icon: "🟤", rarity: "common",   price: 80,  obtainMethod: "상점", description: "튼튼한 가죽 팔찌", effect: { hpBonus: 15 } },
+  { id: "leather-bracelet", name: "가죽 팔찌",   icon: "🟤", rarity: "common",   price: 80,  obtainMethod: "상점", description: "튼튼한 가죽 팔찌", effect: { hpBonus: 45 } },
   { id: "copper-ring",      name: "구리 반지",   icon: "🟠", rarity: "common",   price: 90,  obtainMethod: "상점", description: "구리로 만든 반지", effect: { attackBonus: 5 } },
   { id: "glass-bead",       name: "유리구슬 목걸이", icon: "🔵", rarity: "common",  price: 70,  obtainMethod: "상점", description: "맑은 유리 목걸이", effect: { magicBonus: 5 } },
-  { id: "iron-bangle",      name: "철제 방호구", icon: "⚫", rarity: "uncommon", price: 180, obtainMethod: "상점", description: "방어에 특화된 철제 완장", effect: { defenseBonus: 5, hpBonus: 20 } },
+  { id: "iron-bangle",      name: "철제 방호구", icon: "⚫", rarity: "uncommon", price: 180, obtainMethod: "상점", description: "방어에 특화된 철제 완장", effect: { defenseBonus: 5, hpBonus: 60 } },
   { id: "lucky-charm",      name: "행운의 부적", icon: "🟡", rarity: "uncommon", price: 200, obtainMethod: "상점", description: "행운이 깃든 부적", effect: { critChance: 0.05, goldMultiplier: 0.1 } },
   { id: "scholar-pendant",  name: "학자의 목걸이",icon: "🟣", rarity: "uncommon", price: 220, obtainMethod: "상점", description: "경험치 획득 증가", effect: { xpBonus: 0.15, magicBonus: 8 } },
   // ── 계절 한정 ──────────────────────────────────────────────
   { id: "spring-flower-pin","name": "봄꽃 핀",    icon: "🌸", rarity: "uncommon", price: 260, obtainMethod: "계절 상점 (봄)", description: "봄꽃의 기운이 깃든 핀", effect: { critChance: 0.07, stressReduce: 0.1 } },
-  { id: "summer-shell",     name: "바다 조개 목걸이",icon:"🐚",rarity: "uncommon", price: 280, obtainMethod: "계절 상점 (여름)", description: "여름 바다의 기운", effect: { magicBonus: 10, hpBonus: 25 } },
+  { id: "summer-shell",     name: "바다 조개 목걸이",icon:"🐚",rarity: "uncommon", price: 280, obtainMethod: "계절 상점 (여름)", description: "여름 바다의 기운", effect: { magicBonus: 10, hpBonus: 75 } },
   { id: "autumn-amber",     name: "호박 목걸이",  icon: "🍂", rarity: "rare",     price: 350, obtainMethod: "계절 상점 (가을)", description: "가을의 정수가 담긴 호박", effect: { attackBonus: 12, critChance: 0.06 } },
-  { id: "winter-crystal",   name: "빙정 반지",    icon: "❄️", rarity: "rare",     price: 380, obtainMethod: "계절 상점 (겨울)", description: "얼음처럼 차갑고 단단한 반지", effect: { defenseBonus: 10, hpBonus: 40 } },
+  { id: "winter-crystal",   name: "빙정 반지",    icon: "❄️", rarity: "rare",     price: 380, obtainMethod: "계절 상점 (겨울)", description: "얼음처럼 차갑고 단단한 반지", effect: { defenseBonus: 10, hpBonus: 120 } },
   // ── 연도 기념 한정 ────────────────────────────────────────
   { id: "year1-medal",      name: "1년 기념 메달", icon: "🥇", rarity: "rare",    price: 450, obtainMethod: "연도 한정 (1년)", description: "1년을 버텨낸 증표", effect: { attackBonus: 8, magicBonus: 8, critChance: 0.05 } },
-  { id: "year2-medal",      name: "2년 기념 메달", icon: "🏅", rarity: "rare",    price: 500, obtainMethod: "연도 한정 (2년)", description: "2년의 여정을 담은 메달", effect: { hpBonus: 60, defenseBonus: 8, goldMultiplier: 0.1 } },
+  { id: "year2-medal",      name: "2년 기념 메달", icon: "🏅", rarity: "rare",    price: 500, obtainMethod: "연도 한정 (2년)", description: "2년의 여정을 담은 메달", effect: { hpBonus: 180, defenseBonus: 8, goldMultiplier: 0.1 } },
   { id: "year3-medal",      name: "3년 기념 메달", icon: "🎖️", rarity: "legendary",price: 600, obtainMethod: "연도 한정 (3년)", description: "전설의 영역에 도달한 자의 증표", effect: { attackBonus: 15, magicBonus: 15, critChance: 0.08, xpBonus: 0.1 } },
+  // ── 제작 장신구 ──────────────────────────────────────────
+  { id: "fang-ring",        name: "늑대 송곳니 반지",  icon: "🦷", rarity: "uncommon", obtainMethod: "제작", description: "야수의 날카로움이 깃든 반지", effect: { attackBonus: 8, critChance: 0.05 } },
+  { id: "slime-amulet",     name: "슬라임 호신부",     icon: "💚", rarity: "common",   obtainMethod: "제작", description: "슬라임의 끈질긴 생명력", effect: { hpBonus: 90 } },
+  { id: "frost-earring",    name: "서리 귀걸이",       icon: "🔷", rarity: "uncommon", obtainMethod: "제작", description: "빙결의 마력이 깃든 귀걸이", effect: { magicBonus: 10 } },
+  { id: "bone-ward",        name: "해골 호부",         icon: "🦴", rarity: "uncommon", obtainMethod: "제작", description: "죽은 자의 힘으로 방어력 강화", effect: { defenseBonus: 7, hpBonus: 60 } },
+  { id: "troll-band",       name: "트롤 완장",         icon: "🟤", rarity: "rare",     obtainMethod: "제작", description: "트롤 가죽으로 만든 완장. 강인한 생명력", effect: { hpBonus: 150, defenseBonus: 5 } },
+  { id: "dragon-ring",      name: "용린 반지",         icon: "🐉", rarity: "rare",     obtainMethod: "제작", description: "용의 비늘로 만든 반지. 공격과 방어를 강화", effect: { attackBonus: 12, defenseBonus: 8 } },
+  { id: "frost-core-bangle",name: "빙핵 팔찌",         icon: "❄️", rarity: "rare",     obtainMethod: "제작", description: "빙핵의 냉기가 마법력을 증폭시킨다", effect: { magicBonus: 15, hpBonus: 90 } },
+  { id: "ruby-necklace",    name: "루비 목걸이",       icon: "♦️", rarity: "rare",     obtainMethod: "제작", description: "핏빛 루비의 힘. 치명타가 강화된다", effect: { attackBonus: 10, critChance: 0.08 } },
+  { id: "world-root-ring",  name: "세계수 뿌리 반지",  icon: "🌿", rarity: "legendary",obtainMethod: "제작", description: "세계수의 생명력이 경험치 획득을 높인다", effect: { xpBonus: 0.25, hpBonus: 120 } },
+  { id: "goddess-tear-necklace", name: "여신의 눈물 목걸이", icon: "💧", rarity: "legendary", obtainMethod: "제작", description: "여신의 눈물이 깃든 전설의 목걸이", effect: { attackBonus: 15, magicBonus: 15, critChance: 0.07 } },
+  { id: "abyss-ring",       name: "심연의 반지",       icon: "🕳️", rarity: "legendary",obtainMethod: "제작", description: "심연의 핵으로 만든 반지. 모든 전투 능력 극대화", effect: { attackBonus: 20, magicBonus: 20, critChance: 0.10 } },
 ]
 
 export const WEAPONS: Weapon[] = [
@@ -632,15 +673,6 @@ export const WEAPONS: Weapon[] = [
   { id: "holy-sword",    name: "성검",            icon: "💫", rarity: "legendary", attackBonus: 72, magicAttackBonus: 52, obtainMethod: "조합" },
   { id: "void-blade",    name: "공허의 검",       icon: "🌀", rarity: "legendary", attackBonus: 62, magicAttackBonus: 72, obtainMethod: "조합" },
   { id: "crimson-fang",  name: "붉은 송곳니",    icon: "🦷", rarity: "legendary", attackBonus: 80, magicAttackBonus: 20, critChance: 0.25, obtainMethod: "조합", description: "야수의 힘이 깃든 전설의 무기. 치명타 확률 +25%." },
-  // 조합 추가 (Uncommon)
-  { id: "bone-club",     name: "뼈 곤봉",          icon: "🦴", rarity: "uncommon",  attackBonus: 22, magicAttackBonus: 0,  obtainMethod: "조합", description: "해골 뼈로 만든 묵직한 곤봉." },
-  { id: "goblin-blade",  name: "고블린 단검",      icon: "🗡️", rarity: "uncommon",  attackBonus: 18, magicAttackBonus: 0,  critChance: 0.08, obtainMethod: "조합", description: "고블린 귀로 강화한 날랜 단검." },
-  // 조합 추가 (Rare)
-  { id: "thorn-bow",     name: "가시 활",           icon: "🏹", rarity: "rare",      attackBonus: 38, magicAttackBonus: 5,  critChance: 0.12, obtainMethod: "조합", description: "오크 어금니로 강화한 활." },
-  { id: "dark-staff",    name: "암흑 지팡이",       icon: "🖤", rarity: "rare",      attackBonus: 8,  magicAttackBonus: 48, obtainMethod: "조합", description: "검은 수액이 깃든 마법 지팡이." },
-  // 조합 추가 (Legendary)
-  { id: "world-spear",   name: "세계수의 창",       icon: "🌿", rarity: "legendary", attackBonus: 60, magicAttackBonus: 40, obtainMethod: "조합", description: "세계수 뿌리로 만든 신성한 창." },
-  { id: "abyss-scythe",  name: "심연의 낫",         icon: "⚫", rarity: "legendary", attackBonus: 75, magicAttackBonus: 35, critChance: 0.20, obtainMethod: "조합", description: "심연의 힘이 응축된 전설의 낫." },
   // ── 계절 한정 ──────────────────────────────────────────────────
   { id: "coral-wand",        name: "산호 완드",      icon: "🪸", rarity: "rare",      attackBonus: 10, magicAttackBonus: 42, price: 400, obtainMethod: "계절 상점 (여름)", description: "여름 바다의 마력이 깃든 완드" },
   { id: "autumn-blade",      name: "단풍 단검",      icon: "🍁", rarity: "rare",      attackBonus: 38, magicAttackBonus: 8,  critChance: 0.12, price: 420, obtainMethod: "계절 상점 (가을)", description: "가을의 날카로움을 담은 단검. 치명타 확률 +12%." },
@@ -673,77 +705,83 @@ export const MATERIALS: Material[] = [
 
 // ─── 레시피 ─────────────────────────────────────────────────────────────
 export const RECIPES: Recipe[] = [
-  // ── 아이템 (common) ────────────────────────────────────────────────
-  { id: "mega-potion",       name: "고급 치유 물약",  description: "HP를 80 회복한다",              icon: "🧪", resultType: "item", resultId: "mega-healing",     resultQuantity: 1, ingredients: [{ id: "healing-potion", quantity: 2 }, { id: "slime-gel", quantity: 2 }] },
-  { id: "calm-elixir-r",     name: "정화 엘릭서",     description: "스트레스를 50 감소시킨다",      icon: "✨", resultType: "item", resultId: "calm-elixir",      resultQuantity: 1, ingredients: [{ id: "stress-tea", quantity: 2 }, { id: "wolf-fang", quantity: 1 }] },
-  { id: "berserker-r",       name: "광전사 물약",     description: "HP 30 회복, 전투 강화",         icon: "⚗️", resultType: "item", resultId: "berserker-potion", resultQuantity: 1, ingredients: [{ id: "wolf-fang", quantity: 2 }, { id: "orc-tusk", quantity: 1 }, { id: "goblin-ear", quantity: 2 }] },
-  { id: "mana-potion-r",     name: "마나 물약",       description: "HP 50 회복, 마법력 회복",       icon: "💙", resultType: "item", resultId: "mana-potion",      resultQuantity: 1, ingredients: [{ id: "frost-crystal", quantity: 2 }, { id: "slime-gel", quantity: 2 }, { id: "skeleton-bone", quantity: 1 }] },
-  // ── 아이템 (rare) ──────────────────────────────────────────────────
-  { id: "shadow-tonic-r",    name: "어둠의 영약",     description: "스트레스를 70 감소시킨다",      icon: "🖤", resultType: "item", resultId: "shadow-tonic",     resultQuantity: 1, ingredients: [{ id: "wraith-essence", quantity: 2 }, { id: "dark-sap", quantity: 2 }, { id: "void-shard", quantity: 1 }] },
-  { id: "elixir-of-life-r",  name: "생명의 엘릭서",  description: "HP를 완전 회복한다",             icon: "💊", resultType: "item", resultId: "elixir-of-life",   resultQuantity: 1, ingredients: [{ id: "world-root", quantity: 1 }, { id: "dragon-scale", quantity: 1 }, { id: "healing-potion", quantity: 3 }] },
-  // ── 아이템 (legendary) ────────────────────────────────────────────
-  { id: "goddess-blessing-r",name: "여신의 축복",     description: "HP 완전 회복, 스트레스 -80",    icon: "🌟", resultType: "item", resultId: "goddess-blessing", resultQuantity: 1, ingredients: [{ id: "goddess-tear", quantity: 1 }, { id: "divine-feather", quantity: 2 }, { id: "elixir-of-life", quantity: 1 }] },
+  // ── 아이템 (8종) ──────────────────────────────────────────────────────
+  { id: "mega-potion",       name: "고급 치유 물약",    description: "HP를 80 회복한다",             icon: "🧪", resultType: "item",      resultId: "mega-healing",        resultQuantity: 1, ingredients: [{ id: "healing-potion", quantity: 2 }, { id: "slime-gel", quantity: 2 }] },
+  { id: "calm-elixir-r",     name: "정화 엘릭서",       description: "스트레스를 50 감소시킨다",     icon: "✨", resultType: "item",      resultId: "calm-elixir",         resultQuantity: 1, ingredients: [{ id: "stress-tea", quantity: 2 }, { id: "wolf-fang", quantity: 1 }] },
+  { id: "vitality-elixir-r", name: "활력의 비약",       description: "HP 40, 스트레스 30 동시 회복", icon: "💚", resultType: "item",      resultId: "vitality-elixir",     resultQuantity: 1, ingredients: [{ id: "slime-gel", quantity: 2 }, { id: "frost-crystal", quantity: 1 }] },
+  { id: "frost-vial-r",      name: "서리 물약",         description: "HP를 60 회복한다",             icon: "🔷", resultType: "item",      resultId: "frost-vial",          resultQuantity: 1, ingredients: [{ id: "frost-crystal", quantity: 2 }, { id: "troll-hide", quantity: 1 }] },
+  { id: "world-elixir-r",    name: "세계수 엘릭서",     description: "HP 60, 스트레스 40 동시 회복", icon: "🌿", resultType: "item",      resultId: "world-elixir",        resultQuantity: 1, ingredients: [{ id: "world-root", quantity: 1 }, { id: "dark-sap", quantity: 2 }] },
+  { id: "battle-tonic-r",    name: "전투 강화제",       description: "HP를 30 회복한다",             icon: "⚔️",  resultType: "item",      resultId: "battle-tonic",        resultQuantity: 1, ingredients: [{ id: "wolf-fang", quantity: 2 }, { id: "dragon-scale", quantity: 1 }] },
+  { id: "dark-potion-r",     name: "심연의 포션",       description: "HP를 120 회복한다",            icon: "🕳️", resultType: "item",      resultId: "dark-potion",         resultQuantity: 1, ingredients: [{ id: "void-shard", quantity: 2 }, { id: "abyss-core", quantity: 1 }] },
+  { id: "goddess-grace-r",   name: "여신의 은총",       description: "HP를 150 완전 회복한다",       icon: "💧", resultType: "item",      resultId: "goddess-grace",       resultQuantity: 1, ingredients: [{ id: "divine-feather", quantity: 2 }, { id: "goddess-tear", quantity: 1 }] },
 
-  // ── 무기 (uncommon) ────────────────────────────────────────────────
-  { id: "bone-club-r",       name: "뼈 곤봉 제작",   description: "해골 뼈로 만든 묵직한 곤봉",   icon: "🦴", resultType: "weapon", resultId: "bone-club",     resultQuantity: 1, ingredients: [{ id: "skeleton-bone", quantity: 4 }, { id: "wolf-fang", quantity: 2 }] },
-  { id: "goblin-blade-r",    name: "고블린 단검 제작",description: "고블린 귀로 강화한 단검",       icon: "🗡️", resultType: "weapon", resultId: "goblin-blade",  resultQuantity: 1, ingredients: [{ id: "goblin-ear", quantity: 3 }, { id: "slime-gel", quantity: 2 }, { id: "wooden-sword", quantity: 1 }] },
-  // ── 무기 (rare) ────────────────────────────────────────────────────
-  { id: "silver-blade-r",    name: "은빛 검 제작",   description: "균형 잡힌 고급 검",             icon: "🗡️", resultType: "weapon", resultId: "silver-blade",  resultQuantity: 1, ingredients: [{ id: "iron-sword", quantity: 1 }, { id: "frost-crystal", quantity: 3 }, { id: "troll-hide", quantity: 2 }] },
-  { id: "flame-sword-r",     name: "화염검 제작",    description: "불꽃이 깃든 검",                icon: "🔥", resultType: "weapon", resultId: "flame-sword",   resultQuantity: 1, ingredients: [{ id: "iron-sword", quantity: 1 }, { id: "dragon-scale", quantity: 2 }, { id: "blood-ruby", quantity: 1 }] },
-  { id: "shadow-blade-r",    name: "그림자 검 제작",  description: "어둠에 깃든 치명타 특화 검",   icon: "🌑", resultType: "weapon", resultId: "shadow-blade",  resultQuantity: 1, ingredients: [{ id: "iron-sword", quantity: 1 }, { id: "wraith-essence", quantity: 3 }, { id: "void-shard", quantity: 2 }] },
-  { id: "crystal-wand-r",    name: "수정 완드 제작",  description: "마법 특화 지팡이",              icon: "💎", resultType: "weapon", resultId: "crystal-wand",  resultQuantity: 1, ingredients: [{ id: "magic-staff", quantity: 1 }, { id: "frost-core", quantity: 2 }, { id: "void-shard", quantity: 1 }] },
-  { id: "thorn-bow-r",       name: "가시 활 제작",   description: "오크 어금니로 강화한 활",        icon: "🏹", resultType: "weapon", resultId: "thorn-bow",     resultQuantity: 1, ingredients: [{ id: "bow", quantity: 1 }, { id: "orc-tusk", quantity: 3 }, { id: "troll-hide", quantity: 2 }] },
-  { id: "dark-staff-r",      name: "암흑 지팡이 제작",description: "검은 수액이 깃든 지팡이",       icon: "🖤", resultType: "weapon", resultId: "dark-staff",    resultQuantity: 1, ingredients: [{ id: "magic-staff", quantity: 1 }, { id: "dark-sap", quantity: 3 }, { id: "wraith-essence", quantity: 2 }] },
-  // ── 무기 (legendary) ──────────────────────────────────────────────
-  { id: "holy-sword-r",      name: "성검 제작",       description: "여신의 가호가 깃든 전설의 검", icon: "💫", resultType: "weapon", resultId: "holy-sword",    resultQuantity: 1, ingredients: [{ id: "silver-blade", quantity: 1 }, { id: "goddess-tear", quantity: 1 }, { id: "divine-feather", quantity: 3 }] },
-  { id: "void-blade-r",      name: "공허의 검 제작",  description: "심연에서 태어난 전설의 검",    icon: "🌀", resultType: "weapon", resultId: "void-blade",    resultQuantity: 1, ingredients: [{ id: "silver-blade", quantity: 1 }, { id: "abyss-core", quantity: 1 }, { id: "void-shard", quantity: 3 }] },
-  { id: "crimson-fang-r",    name: "붉은 송곳니 제작",description: "야수의 힘이 깃든 전설의 무기", icon: "🦷", resultType: "weapon", resultId: "crimson-fang",  resultQuantity: 1, ingredients: [{ id: "silver-blade", quantity: 1 }, { id: "wolf-fang", quantity: 5 }, { id: "dragon-scale", quantity: 3 }, { id: "blood-ruby", quantity: 2 }] },
-  { id: "world-spear-r",     name: "세계수의 창 제작",description: "세계수 뿌리로 만든 신성한 창", icon: "🌿", resultType: "weapon", resultId: "world-spear",   resultQuantity: 1, ingredients: [{ id: "world-root", quantity: 2 }, { id: "divine-feather", quantity: 2 }, { id: "dark-sap", quantity: 2 }] },
-  { id: "abyss-scythe-r",    name: "심연의 낫 제작",  description: "심연의 힘이 응축된 전설의 낫", icon: "⚫", resultType: "weapon", resultId: "abyss-scythe",  resultQuantity: 1, ingredients: [{ id: "abyss-core", quantity: 2 }, { id: "void-shard", quantity: 4 }, { id: "blood-ruby", quantity: 2 }] },
+  // ── 무기 (9종) ──────────────────────────────────────────────────────────
+  { id: "silver-blade-r",    name: "은빛 검 제작",      description: "균형 잡힌 고급 검",            icon: "🗡️", resultType: "weapon",    resultId: "silver-blade",        resultQuantity: 1, ingredients: [{ id: "iron-sword", quantity: 1 }, { id: "frost-crystal", quantity: 3 }, { id: "troll-hide", quantity: 2 }] },
+  { id: "flame-sword-r",     name: "화염검 제작",       description: "불꽃이 깃든 검",               icon: "🔥", resultType: "weapon",    resultId: "flame-sword",         resultQuantity: 1, ingredients: [{ id: "iron-sword", quantity: 1 }, { id: "dragon-scale", quantity: 2 }, { id: "blood-ruby", quantity: 1 }] },
+  { id: "crystal-wand-r",    name: "수정 완드 제작",    description: "마법 특화 지팡이",             icon: "💎", resultType: "weapon",    resultId: "crystal-wand",        resultQuantity: 1, ingredients: [{ id: "magic-staff", quantity: 1 }, { id: "frost-core", quantity: 2 }, { id: "void-shard", quantity: 1 }] },
+  { id: "shadow-blade-r",    name: "그림자 검 제작",    description: "치명타 특화 검",               icon: "🌑", resultType: "weapon",    resultId: "shadow-blade",        resultQuantity: 1, ingredients: [{ id: "iron-sword", quantity: 1 }, { id: "wraith-essence", quantity: 3 }, { id: "void-shard", quantity: 2 }] },
+  { id: "holy-sword-r",      name: "성검 제작",         description: "여신의 가호가 깃든 전설의 검", icon: "💫", resultType: "weapon",    resultId: "holy-sword",          resultQuantity: 1, ingredients: [{ id: "silver-blade", quantity: 1 }, { id: "goddess-tear", quantity: 1 }, { id: "divine-feather", quantity: 3 }] },
+  { id: "void-blade-r",      name: "공허의 검 제작",    description: "심연에서 태어난 전설의 검",    icon: "🌀", resultType: "weapon",    resultId: "void-blade",          resultQuantity: 1, ingredients: [{ id: "silver-blade", quantity: 1 }, { id: "abyss-core", quantity: 1 }, { id: "void-shard", quantity: 3 }] },
+  { id: "crimson-fang-r",    name: "붉은 송곳니 제작",  description: "야수의 힘이 깃든 전설의 무기", icon: "🦷", resultType: "weapon",    resultId: "crimson-fang",        resultQuantity: 1, ingredients: [{ id: "silver-blade", quantity: 1 }, { id: "wolf-fang", quantity: 5 }, { id: "dragon-scale", quantity: 3 }, { id: "blood-ruby", quantity: 2 }] },
+  { id: "dark-sap-staff-r",  name: "세계수 완드 제작",  description: "세계수의 어둠을 담은 완드",    icon: "🖤", resultType: "weapon",    resultId: "crystal-wand",        resultQuantity: 1, ingredients: [{ id: "dark-sap", quantity: 3 }, { id: "world-root", quantity: 1 }, { id: "magic-staff", quantity: 1 }] },
+  { id: "bone-lance-r",      name: "해골 창 제작",      description: "해골 뼈로 만든 강인한 무기",   icon: "🦴", resultType: "weapon",    resultId: "silver-blade",        resultQuantity: 1, ingredients: [{ id: "skeleton-bone", quantity: 5 }, { id: "orc-tusk", quantity: 2 }, { id: "iron-sword", quantity: 1 }] },
 
-  // ── 의상 (uncommon) ────────────────────────────────────────────────
-  { id: "troll-armor-r",     name: "트롤 갑옷 제작",  description: "두꺼운 트롤 가죽으로 만든 갑옷",icon: "🟤", resultType: "outfit", resultId: "troll-armor",   resultQuantity: 1, ingredients: [{ id: "troll-hide", quantity: 4 }, { id: "orc-tusk", quantity: 2 }] },
-  { id: "bone-robe-r",       name: "뼈 로브 제작",   description: "해골 뼈로 장식한 마법사 로브",  icon: "🦴", resultType: "outfit", resultId: "bone-robe",     resultQuantity: 1, ingredients: [{ id: "skeleton-bone", quantity: 5 }, { id: "wraith-essence", quantity: 1 }] },
-  // ── 의상 (rare) ────────────────────────────────────────────────────
-  { id: "frost-cloak-r",     name: "서리 망토 제작",  description: "서리 결정으로 짠 마법 망토",   icon: "🔷", resultType: "outfit", resultId: "frost-cloak",   resultQuantity: 1, ingredients: [{ id: "frost-crystal", quantity: 4 }, { id: "frost-core", quantity: 1 }, { id: "troll-hide", quantity: 2 }] },
-  { id: "shadow-robe-r",     name: "그림자 로브 제작",description: "어둠에 녹아드는 은신 로브",     icon: "🌑", resultType: "outfit", resultId: "shadow-robe",   resultQuantity: 1, ingredients: [{ id: "dark-sap", quantity: 3 }, { id: "wraith-essence", quantity: 3 }, { id: "void-shard", quantity: 1 }] },
-  { id: "dragon-scale-armor-r",name:"용비늘 갑옷 제작",description:"용의 비늘로 만든 강인한 갑옷", icon: "🐉", resultType: "outfit", resultId: "dragon-scale-armor", resultQuantity: 1, ingredients: [{ id: "dragon-scale", quantity: 4 }, { id: "blood-ruby", quantity: 1 }, { id: "orc-tusk", quantity: 2 }] },
-  // ── 의상 (legendary) ──────────────────────────────────────────────
-  { id: "divine-vestment-r", name: "신성 예복 제작",  description: "여신의 은총이 깃든 성스러운 예복",icon:"🪶", resultType: "outfit", resultId: "divine-vestment",resultQuantity: 1, ingredients: [{ id: "divine-feather", quantity: 4 }, { id: "goddess-tear", quantity: 1 }, { id: "world-root", quantity: 1 }] },
-  { id: "void-robe-r",       name: "공허 로브 제작",  description: "심연의 힘을 담은 전설의 로브",  icon: "⬛", resultType: "outfit", resultId: "void-robe",     resultQuantity: 1, ingredients: [{ id: "abyss-core", quantity: 1 }, { id: "void-shard", quantity: 5 }, { id: "dark-sap", quantity: 3 }] },
+  // ── 의상 (6종) ──────────────────────────────────────────────────────────
+  { id: "forest-cloak-r",    name: "숲의 망토 제작",    description: "경량 전투복",                  icon: "🧥", resultType: "outfit",    resultId: "forest-cloak",        resultQuantity: 1, ingredients: [{ id: "wolf-fang", quantity: 3 }, { id: "goblin-ear", quantity: 3 }, { id: "slime-gel", quantity: 2 }] },
+  { id: "frost-robe-r",      name: "서리 로브 제작",    description: "설원의 마법 로브",             icon: "🌨️", resultType: "outfit",    resultId: "frost-robe",          resultQuantity: 1, ingredients: [{ id: "frost-crystal", quantity: 4 }, { id: "troll-hide", quantity: 2 }, { id: "orc-tusk", quantity: 1 }] },
+  { id: "bone-armor-r",      name: "성채 갑옷 제작",    description: "성채의 강철 갑옷",             icon: "🛡️", resultType: "outfit",    resultId: "bone-armor",          resultQuantity: 1, ingredients: [{ id: "skeleton-bone", quantity: 4 }, { id: "blood-ruby", quantity: 1 }, { id: "wraith-essence", quantity: 2 }] },
+  { id: "worldtree-robe-r",  name: "세계수 드레스 제작",description: "세계수의 정기 드레스",         icon: "🌿", resultType: "outfit",    resultId: "worldtree-robe",      resultQuantity: 1, ingredients: [{ id: "dark-sap", quantity: 3 }, { id: "world-root", quantity: 1 }, { id: "divine-feather", quantity: 1 }] },
+  { id: "holy-robe-r",       name: "신성한 로브 제작",  description: "여신의 신성한 로브",           icon: "🪶", resultType: "outfit",    resultId: "holy-robe",           resultQuantity: 1, ingredients: [{ id: "divine-feather", quantity: 3 }, { id: "goddess-tear", quantity: 1 }, { id: "world-root", quantity: 1 }] },
+  { id: "abyss-armor-r",     name: "심연의 갑옷 제작",  description: "궁극의 전투복",                icon: "⬛", resultType: "outfit",    resultId: "abyss-armor",         resultQuantity: 1, ingredients: [{ id: "abyss-core", quantity: 1 }, { id: "void-shard", quantity: 3 }, { id: "dragon-scale", quantity: 2 }] },
+
+  // ── 장신구 (11종) ──────────────────────────────────────────────────────
+  { id: "fang-ring-r",        name: "늑대 반지 제작",       description: "야수의 날카로움",           icon: "🦷", resultType: "accessory", resultId: "fang-ring",           resultQuantity: 1, ingredients: [{ id: "wolf-fang", quantity: 4 }, { id: "goblin-ear", quantity: 2 }] },
+  { id: "slime-amulet-r",     name: "슬라임 호신부 제작",   description: "끈질긴 생명력",             icon: "💚", resultType: "accessory", resultId: "slime-amulet",        resultQuantity: 1, ingredients: [{ id: "slime-gel", quantity: 5 }, { id: "skeleton-bone", quantity: 2 }] },
+  { id: "frost-earring-r",    name: "서리 귀걸이 제작",     description: "빙결의 마력",               icon: "🔷", resultType: "accessory", resultId: "frost-earring",       resultQuantity: 1, ingredients: [{ id: "frost-crystal", quantity: 3 }, { id: "orc-tusk", quantity: 1 }] },
+  { id: "bone-ward-r",        name: "해골 호부 제작",       description: "죽은 자의 방어력",          icon: "🦴", resultType: "accessory", resultId: "bone-ward",           resultQuantity: 1, ingredients: [{ id: "skeleton-bone", quantity: 4 }, { id: "wraith-essence", quantity: 1 }] },
+  { id: "troll-band-r",       name: "트롤 완장 제작",       description: "강인한 생명력",             icon: "🟤", resultType: "accessory", resultId: "troll-band",          resultQuantity: 1, ingredients: [{ id: "troll-hide", quantity: 3 }, { id: "frost-core", quantity: 1 }] },
+  { id: "dragon-ring-r",      name: "용린 반지 제작",       description: "공격과 방어를 강화",        icon: "🐉", resultType: "accessory", resultId: "dragon-ring",         resultQuantity: 1, ingredients: [{ id: "dragon-scale", quantity: 2 }, { id: "blood-ruby", quantity: 1 }] },
+  { id: "frost-core-bangle-r",name: "빙핵 팔찌 제작",       description: "마법력 증폭 팔찌",          icon: "❄️", resultType: "accessory", resultId: "frost-core-bangle",   resultQuantity: 1, ingredients: [{ id: "frost-core", quantity: 1 }, { id: "frost-crystal", quantity: 3 }, { id: "troll-hide", quantity: 1 }] },
+  { id: "ruby-necklace-r",    name: "루비 목걸이 제작",     description: "치명타를 강화하는 목걸이",  icon: "♦️", resultType: "accessory", resultId: "ruby-necklace",       resultQuantity: 1, ingredients: [{ id: "blood-ruby", quantity: 2 }, { id: "wraith-essence", quantity: 2 }] },
+  { id: "world-root-ring-r",  name: "세계수 반지 제작",     description: "경험치 획득 증가 반지",     icon: "🌿", resultType: "accessory", resultId: "world-root-ring",     resultQuantity: 1, ingredients: [{ id: "world-root", quantity: 2 }, { id: "dark-sap", quantity: 2 }, { id: "divine-feather", quantity: 1 }] },
+  { id: "goddess-necklace-r", name: "여신의 목걸이 제작",   description: "여신의 눈물이 깃든 전설",   icon: "💧", resultType: "accessory", resultId: "goddess-tear-necklace",resultQuantity: 1, ingredients: [{ id: "goddess-tear", quantity: 1 }, { id: "divine-feather", quantity: 2 }, { id: "world-root", quantity: 1 }] },
+  { id: "abyss-ring-r",       name: "심연의 반지 제작",     description: "모든 전투 능력 극대화",     icon: "🕳️", resultType: "accessory", resultId: "abyss-ring",          resultQuantity: 1, ingredients: [{ id: "abyss-core", quantity: 1 }, { id: "void-shard", quantity: 4 }, { id: "goddess-tear", quantity: 1 }] },
 ]
+
 
 // 조합 결과 아이템 (인벤토리에 추가될 것들)
 export const CRAFTED_ITEMS: Item[] = [
-  { id: "mega-healing",    name: "고급 치유 물약",   description: "HP를 80 회복한다",          effect: { health: 80 },    price: 0, icon: "🧪" },
-  { id: "calm-elixir",     name: "정화 엘릭서",      description: "스트레스를 50 감소",        effect: { stress: -50 },   price: 0, icon: "✨" },
-  { id: "berserker-potion",name: "광전사 물약",      description: "HP 30 회복, 전투력 일시 상승",effect: { health: 30 },   price: 0, icon: "⚗️" },
-  { id: "mana-potion",     name: "마나 물약",        description: "HP 50 회복, 마법력 회복",   effect: { health: 50 },    price: 0, icon: "💙" },
-  { id: "elixir-of-life",  name: "생명의 엘릭서",   description: "HP를 완전 회복한다",         effect: { health: 999 },   price: 0, icon: "💊" },
-  { id: "shadow-tonic",    name: "어둠의 영약",      description: "스트레스를 70 감소",        effect: { stress: -70 },   price: 0, icon: "🖤" },
-  { id: "goddess-blessing",name: "여신의 축복",      description: "HP 완전 회복, 스트레스 -80",effect: { health: 999, stress: -80 }, price: 0, icon: "🌟" },
+  { id: "mega-healing",    name: "고급 치유 물약",  description: "HP를 80 회복한다",       effect: { health: 80 },              price: 0, icon: "🧪" },
+  { id: "calm-elixir",     name: "정화 엘릭서",     description: "스트레스를 50 감소",      effect: { stress: -50 },             price: 0, icon: "✨" },
+  { id: "vitality-elixir", name: "활력의 비약",     description: "HP 40 회복, 스트레스 30 감소", effect: { health: 40, stress: -30 }, price: 0, icon: "💚" },
+  { id: "battle-tonic",    name: "전투 강화제",     description: "HP를 30 회복한다",       effect: { health: 30 },              price: 0, icon: "⚔️" },
+  { id: "goddess-grace",   name: "여신의 은총",     description: "HP를 150 완전 회복한다",  effect: { health: 150 },             price: 0, icon: "💧" },
+  { id: "dark-potion",     name: "심연의 포션",     description: "HP를 120 회복한다",      effect: { health: 120 },             price: 0, icon: "🕳️" },
+  { id: "world-elixir",    name: "세계수 엘릭서",   description: "HP 60 회복, 스트레스 40 감소", effect: { health: 60, stress: -40 }, price: 0, icon: "🌿" },
+  { id: "frost-vial",      name: "서리 물약",       description: "HP를 60 회복한다",       effect: { health: 60 },              price: 0, icon: "🔷" },
+  { id: "goddess-tear-blessed", name: "여신의 눈물", description: "세계의 구원자를 위해 여신이 흘린 눈물. 경이로운 빛을 발한다.", effect: { health: 0 }, price: 0, icon: "✨" },
 ]
 
 // Activities (same as before)
 export const ACTIVITIES: Activity[] = [
-  { id: "study-science", name: "과학 공부", description: "과학 서적을 읽고 실험합니다", category: "study", statChanges: { intelligence: 3, creativity: 1 }, stressChange: 5, goldChange: 0, duration: 1, icon: "\u{1F52C}" },
-  { id: "study-literature", name: "문학 공부", description: "시와 소설을 읽습니다", category: "study", statChanges: { intelligence: 2, charm: 1, creativity: 2 }, stressChange: 3, goldChange: 0, duration: 1, icon: "\u{1F4DA}" },
-  { id: "study-theology", name: "신학 공부", description: "종교와 철학을 배웁니다", category: "study", statChanges: { faith: 3, morality: 2, intelligence: 1 }, stressChange: 4, goldChange: 0, duration: 1, icon: "\u{1F64F}" },
-  { id: "study-magic", name: "마법 수업", description: "마법의 기초를 배웁니다", category: "study", statChanges: { magic: 3, intelligence: 1 }, stressChange: 6, goldChange: -30, duration: 1, icon: "\u2728" },
-  { id: "study-etiquette", name: "예절 수업", description: "귀족의 예절을 배웁니다", category: "study", statChanges: { charm: 3, morality: 1 }, stressChange: 4, goldChange: -20, duration: 1, icon: "\u{1F380}" },
-  { id: "study-art", name: "미술 수업", description: "그림과 조각을 배웁니다", category: "study", statChanges: { creativity: 4, charm: 1 }, stressChange: 2, goldChange: -25, duration: 1, icon: "\u{1F3A8}" },
-  { id: "work-farm", name: "농장 일", description: "농장에서 일합니다", category: "work", statChanges: { strength: 2, housework: 1 }, stressChange: 4, goldChange: 30, duration: 1, icon: "\u{1F33E}" },
-  { id: "work-inn", name: "여관 일", description: "여관에서 서빙합니다", category: "work", statChanges: { charm: 1, cooking: 2, housework: 1 }, stressChange: 5, goldChange: 40, duration: 1, icon: "\u{1F37D}\uFE0F" },
-  { id: "work-church", name: "교회 봉사", description: "교회에서 봉사합니다", category: "work", statChanges: { faith: 2, morality: 2 }, stressChange: 2, goldChange: 15, duration: 1, icon: "\u26EA" },
-  { id: "work-hunter", name: "사냥 도우미", description: "사냥꾼을 돕습니다", category: "work", statChanges: { combat: 2, strength: 1 }, stressChange: 6, goldChange: 50, duration: 1, requirements: { strength: 30 }, icon: "\u{1F3F9}" },
-  { id: "work-tutor", name: "과외 선생", description: "어린 아이들을 가르칩니다", category: "work", statChanges: { intelligence: 1, charm: 1 }, stressChange: 3, goldChange: 60, duration: 1, requirements: { intelligence: 50 }, icon: "\u{1F468}\u200D\u{1F3EB}" },
+  { id: "study-science", name: "과학 공부", description: "과학 서적을 읽고 실험합니다", category: "study", statChanges: {intelligence: 3, creativity: 1}, stressChange: 5, goldChange: 0, duration: 1, icon: "\u{1F52C}" },
+  { id: "study-literature", name: "문학 공부", description: "시와 소설을 읽습니다", category: "study", statChanges: {intelligence: 2, charm: 1, creativity: 2}, stressChange: 3, goldChange: 0, duration: 1, icon: "\u{1F4DA}" },
+  { id: "study-theology", name: "신학 공부", description: "종교와 철학을 배웁니다", category: "study", statChanges: {faith: 3, morality: 2, intelligence: 1}, stressChange: 4, goldChange: 0, duration: 1, icon: "\u{1F64F}" },
+  { id: "study-magic", name: "마법 수업", description: "마법의 기초를 배웁니다", category: "study", statChanges: {magic: 3, intelligence: 1}, stressChange: 6, goldChange: -30, duration: 1, icon: "\u2728" },
+  { id: "study-etiquette", name: "예절 수업", description: "귀족의 예절을 배웁니다", category: "study", statChanges: {charm: 3, morality: 1}, stressChange: 4, goldChange: -20, duration: 1, icon: "\u{1F380}" },
+  { id: "study-art", name: "미술 수업", description: "그림과 조각을 배웁니다", category: "study", statChanges: {creativity: 4, charm: 1}, stressChange: 2, goldChange: -25, duration: 1, icon: "\u{1F3A8}" },
+  { id: "work-farm", name: "농장 일", description: "농장에서 일합니다", category: "work", statChanges: {strength: 2, housework: 1}, stressChange: 4, goldChange: 30, duration: 1, icon: "\u{1F33E}" },
+  { id: "work-inn", name: "여관 일", description: "여관에서 서빙합니다", category: "work", statChanges: {charm: 1, cooking: 2, housework: 1}, stressChange: 5, goldChange: 40, duration: 1, icon: "\u{1F37D}\uFE0F" },
+  { id: "work-church", name: "교회 봉사", description: "교회에서 봉사합니다", category: "work", statChanges: {faith: 2, morality: 2}, stressChange: 2, goldChange: 15, duration: 1, icon: "\u26EA" },
+  { id: "work-hunter", name: "사냥 도우미", description: "사냥꾼을 돕습니다", category: "work", statChanges: {combat: 2, strength: 1}, stressChange: 6, goldChange: 50, duration: 1, requirements: { strength: 30 }, icon: "\u{1F3F9}" },
+  { id: "work-tutor", name: "과외 선생", description: "어린 아이들을 가르칩니다", category: "work", statChanges: {intelligence: 1, charm: 1}, stressChange: 3, goldChange: 60, duration: 1, requirements: { intelligence: 50 }, icon: "\u{1F468}\u200D\u{1F3EB}" },
   { id: "rest-sleep", name: "휴식", description: "집에서 푹 쉽니다", category: "rest", statChanges: {}, stressChange: -15, goldChange: 0, duration: 1, icon: "\u{1F634}" },
-  { id: "rest-walk", name: "산책", description: "마을을 돌아다닙니다", category: "rest", statChanges: { charm: 1 }, stressChange: -8, goldChange: 0, duration: 1, icon: "\u{1F6B6}" },
-  { id: "rest-spa", name: "온천", description: "온천에서 피로를 풉니다", category: "rest", statChanges: { charm: 2 }, stressChange: -20, goldChange: -30, duration: 1, icon: "\u2668\uFE0F" },
-  { id: "social-friend", name: "친구 만나기", description: "친구들과 시간을 보냅니다", category: "social", statChanges: { charm: 2, morality: 1 }, stressChange: -5, goldChange: -10, duration: 1, icon: "\u{1F46B}" },
-  { id: "social-festival", name: "축제 참가", description: "마을 축제에 참가합니다", category: "social", statChanges: { charm: 2, creativity: 1 }, stressChange: -10, goldChange: -20, duration: 1, icon: "\u{1F389}" },
-  { id: "combat-training", name: "무술 수련", description: "검술과 무술을 배웁니다", category: "combat", statChanges: { combat: 3, strength: 2 }, stressChange: 8, goldChange: -20, duration: 1, icon: "\u2694\uFE0F" },
-  { id: "combat-sparring", name: "모의 전투", description: "다른 수련생과 대련합니다", category: "combat", statChanges: { combat: 4, strength: 1 }, stressChange: 10, goldChange: 0, duration: 1, requirements: { combat: 20 }, icon: "\u{1F93A}" },
+  { id: "rest-walk", name: "산책", description: "마을을 돌아다닙니다", category: "rest", statChanges: {charm: 1}, stressChange: -8, goldChange: 0, duration: 1, icon: "\u{1F6B6}" },
+  { id: "rest-spa", name: "온천", description: "온천에서 피로를 풉니다", category: "rest", statChanges: {charm: 2}, stressChange: -20, goldChange: -30, duration: 1, icon: "\u2668\uFE0F" },
+  { id: "social-friend", name: "친구 만나기", description: "친구들과 시간을 보냅니다", category: "social", statChanges: {charm: 2, morality: 1}, stressChange: -5, goldChange: -10, duration: 1, icon: "\u{1F46B}" },
+  { id: "social-festival", name: "축제 참가", description: "마을 축제에 참가합니다", category: "social", statChanges: {charm: 2, creativity: 1}, stressChange: -10, goldChange: -20, duration: 1, icon: "\u{1F389}" },
+  { id: "combat-training", name: "무술 수련", description: "검술과 무술을 배웁니다", category: "combat", statChanges: {combat: 3, strength: 2}, stressChange: 8, goldChange: -20, duration: 1, icon: "\u2694\uFE0F" },
+  { id: "combat-sparring", name: "모의 전투", description: "다른 수련생과 대련합니다", category: "combat", statChanges: {combat: 4, strength: 1}, stressChange: 10, goldChange: 0, duration: 1, requirements: { combat: 20 }, icon: "\u{1F93A}" },
   // dungeon-explore 활동은 스케줄이 아닌 던전선택 화면에서 직접 진입
 ]
 
@@ -798,14 +836,279 @@ export const SEASONAL_SHOP_ENTRIES: SeasonalShopEntry[] = [
 ]
 
 // Seasonal Events
+
+// ═══════════════════════════════════════════════════════════════════
+// NPC 시스템
+// ═══════════════════════════════════════════════════════════════════
+
+export interface NPC {
+  id: string
+  name: string
+  icon: string
+  role: string
+  gender: "female" | "male"
+  description: string
+  // 조우 조건
+  meetCondition: {
+    year?: number        // 최소 년차
+    month?: number       // 최소 월
+    stats?: Partial<Stats>
+    morality?: { min?: number; max?: number }  // 도덕 범위 조건
+    dungeonCleared?: string  // 특정 던전 클리어
+    flag?: string            // 특정 플래그
+  }
+  // 공략 조건 (호감 올리기 위한 선호)
+  preferStats?: Partial<Stats>  // 높을수록 호감 대화 시 보너스
+  difficulty: 1 | 2 | 3 | 4 | 5
+  // 호감 단계별 대사
+  dialogues: {
+    first: string      // 첫 만남
+    low: string        // 호감 0~29
+    mid: string        // 호감 30~59
+    high: string       // 호감 60~99
+    max: string        // 호감 100
+    gift_low: string   // 선물 (낮은 등급)
+    gift_high: string  // 선물 (높은 등급)
+    daily_limit: string // 오늘은 이미 대화함
+  }
+  // 전용 장신구 (호감 100 달성 시)
+  giftAccessoryId: string
+  // 로맨스 전용 조건
+  romanceCondition?: {
+    morality?: { min?: number; max?: number }
+  }
+  // 데이트 이벤트 설명
+  dateDescription: string
+  // 엔딩 연결 (로맨스 엔딩 id)
+  romanceEndingId?: string
+}
+
+export const NPCS: NPC[] = [
+  // ── 여성 NPC ─────────────────────────────────────────────────
+  {
+    id: "liana",
+    name: "리아나",
+    icon: "👑",
+    role: "왕국의 왕녀 (2학년)",
+    gender: "female",
+    description: "차갑고 도도한 왕녀. 겉으로는 완벽하지만 내면 깊이 외로움을 품고 있다. 쉽게 마음을 열지 않는다.",
+    meetCondition: { year: 2, month: 3, stats: { charm: 40 } },
+    preferStats: { charm: 1, faith: 1, morality: 1 },
+    difficulty: 5,
+    dialogues: {
+      first: "...네가 {플레이어}? 소문은 들었어. 하지만 왕녀인 내게 말을 거는 건 상당한 용기가 필요한 일이야.",
+      low: "용무가 있으면 말하도록. 나는 바쁜 사람이야.",
+      mid: "...최근 네가 눈에 띄더군. 뭔가 다른 구석이 있어.",
+      high: "{플레이어}, 솔직히 말할게. 이런 감정은 처음이야. 네 옆에 있으면... 조금 편해.",
+      max: "왕녀로서가 아닌 그냥 나로서 말하는 거야. {플레이어}, 나는 네가 좋아.",
+      gift_low: "...흠. 성의는 인정하지.",
+      gift_high: "이걸... 나를 위해? 고마워. 진심으로.",
+      daily_limit: "오늘은 충분히 이야기했어. 내일 보도록.",
+    },
+    giftAccessoryId: "royal-brooch",
+    dateDescription: "왕궁 정원을 단둘이 거닐었다. 리아나는 평소와 달리 조용히 웃어 보였다.",
+    romanceEndingId: "romance-liana",
+  },
+  {
+    id: "erika",
+    name: "에리카",
+    icon: "⚔️",
+    role: "아카데미 전투 교관",
+    gender: "female",
+    description: "냉철하고 엄격한 전투 교관. 실력 없는 자에게는 눈길도 주지 않지만, 진심으로 노력하는 자에게는 달라진다.",
+    meetCondition: { year: 2, month: 3 },
+    preferStats: { combat: 1, strength: 1, morality: 1 },
+    difficulty: 4,
+    dialogues: {
+      first: "나는 에리카 교관이다. 아카데미에서 전투를 가르친다. 약한 자는 필요 없으니 실망시키지 마라.",
+      low: "훈련에는 집중하도록. 잡담은 필요 없어.",
+      mid: "...너 꽤 성장했군. 합격이다.",
+      high: "{플레이어}. 교관으로서가 아니라 개인적으로 말하는 거야. 넌 내가 만난 제자 중 가장 성실해.",
+      max: "이런 말은 처음 하는데... 훈련 이후에 같이 밥이라도 먹을래?",
+      gift_low: "훈련 도구도 아닌데... 뭐, 받아두지.",
+      gift_high: "이걸 나한테? 교관 체면 때문에 크게 반응은 못 하지만... 감사해.",
+      daily_limit: "오늘 할 말은 다 했다. 내일 훈련 보자.",
+    },
+    giftAccessoryId: "iron-badge",
+    dateDescription: "함께 새벽 훈련을 마치고 조용한 식당에서 식사했다. 에리카는 드물게 웃어 보였다.",
+    romanceEndingId: "romance-erika",
+  },
+  {
+    id: "sera",
+    name: "세라",
+    icon: "✨",
+    role: "아카데미 동기생 (마법 특기)",
+    gender: "female",
+    description: "밝고 호기심 넘치는 마법 소녀. 모르는 것을 알아가는 걸 좋아하며 친구를 쉽게 사귄다.",
+    meetCondition: { year: 2, month: 3 },
+    preferStats: { magic: 1, intelligence: 1 },
+    difficulty: 3,
+    dialogues: {
+      first: "안녕! 나 세라야! 같은 입학생이지? 우리 친해지자! 마법 잘 써?",
+      low: "{플레이어}! 오늘도 잘 지냈어? 나 새로운 마법 배웠는데 볼래?",
+      mid: "{플레이어}랑 이야기하면 항상 즐거워. 왠지 같이 있으면 마음이 편해.",
+      high: "있잖아, {플레이어}... 사실 좋아하는 사람 생겼어. 아직 말 못 하겠지만.",
+      max: "{플레이어}한테만 말할게. 사실 그 사람... 너야. 바보같지?",
+      gift_low: "어머 선물이야? 고마워! 소중히 할게!",
+      gift_high: "이거 정말 비싼 거 아니야?! 너무 좋아!! 진짜 최고야!",
+      daily_limit: "오늘은 수업 때문에 바빠. 내일 도서관에서 볼까?",
+    },
+    giftAccessoryId: "magic-crystal-pin",
+    dateDescription: "함께 마법 연구소에서 실험하다가 폭발 사고를 냈다. 그럼에도 둘이 마주 보고 웃었다.",
+    romanceEndingId: "romance-sera",
+  },
+  {
+    id: "mina",
+    name: "미나",
+    icon: "💰",
+    role: "상인 딸, 아카데미 동기생",
+    gender: "female",
+    description: "털털하고 현실적인 상인 집안 딸. 돈과 실용성을 중시하지만 의리 있고 솔직하다.",
+    meetCondition: { year: 2, month: 3 },
+    preferStats: { charm: 1, creativity: 1 },
+    difficulty: 2,
+    dialogues: {
+      first: "어이! 새 학생? 나는 미나야. 뭐든 필요한 거 있으면 말해. 인맥 넓은 편이거든.",
+      low: "요즘 어때? 나는 상점가에서 알바 뛰느라 바빠 죽겠어.",
+      mid: "{플레이어}는 진짜 가끔 놀래키더라. 평범한 것 같아도 특별한 구석이 있어.",
+      high: "솔직히 말하면... {플레이어} 옆에 있는 게 제일 편해. 이거 고백이라고 받아들여도 되는데.",
+      max: "에이, 숨길 필요 없잖아. 나 {플레이어} 좋아해. 거절할 거야?",
+      gift_low: "어, 줘서 고마워. 쓸모 있을 것 같아.",
+      gift_high: "이거... 꽤 좋은 거잖아. 아, 기분 좋다.",
+      daily_limit: "오늘은 가게 도와야 해서. 내일 보자!",
+    },
+    giftAccessoryId: "coin-charm",
+    dateDescription: "상점가를 함께 돌아다니며 흥정을 배웠다. 미나의 활기찬 모습에 마음이 따뜻해졌다.",
+    romanceEndingId: "romance-mina",
+  },
+  // ── 남성 NPC ─────────────────────────────────────────────────
+  {
+    id: "kairen",
+    name: "카이렌",
+    icon: "🛡️",
+    role: "왕국 기사단 소속 왕자",
+    gender: "male",
+    description: "정의롭고 완고한 왕자. 기사도를 목숨처럼 여기며 불의와 타협하지 않는다. 도덕적 타락을 경멸한다.",
+    meetCondition: { year: 2, month: 3, stats: { morality: 30, combat: 30 } },
+    preferStats: { combat: 1, morality: 1, faith: 1 },
+    difficulty: 5,
+    romanceCondition: { morality: { min: 40 } },
+    dialogues: {
+      first: "나는 카이렌이다. 기사로서 이 아카데미를 순찰 중이야. 네가 {플레이어}? 눈빛이 좋군.",
+      low: "{플레이어}. 기사의 길은 쉽지 않아. 하지만 네겐 그 자질이 보여.",
+      mid: "솔직히 말하면... 너와 이야기하는 시간이 하루 중 가장 즐거워.",
+      high: "{플레이어}, 기사로서 맹세할게. 너를 지키겠어. 그 이상의 의미도 담아서.",
+      max: "왕자로서의 의무와 내 마음 사이에서 고민했어. 하지만 답은 하나야. {플레이어}, 나와 함께해 줄래?",
+      gift_low: "성의는 받아들이겠어.",
+      gift_high: "이걸... 나를 위해 준비했어? 기사로서 이런 감정은 처음이야.",
+      daily_limit: "오늘의 순찰은 끝났어. 내일 훈련장에서 보자.",
+    },
+    giftAccessoryId: "knight-emblem",
+    dateDescription: "기사 훈련장에서 함께 검술을 연마했다. 카이렌은 진지하면서도 따뜻한 눈빛으로 가르쳐줬다.",
+    romanceEndingId: "romance-kairen",
+  },
+  {
+    id: "darius",
+    name: "다리우스",
+    icon: "🌑",
+    role: "어둠의 거래상",
+    gender: "male",
+    description: "정체불명의 거래상. 겉으로는 평범한 상인이지만 비밀스러운 거래를 한다. 어둠 속에서 모습을 드러낸다.",
+    meetCondition: { year: 1, month: 6, morality: { max: 20 } },
+    preferStats: { magic: 1, intelligence: 1 },
+    difficulty: 4,
+    romanceCondition: { morality: { max: -10 } },
+    dialogues: {
+      first: "...재미있는 눈빛이군. 어둠을 두려워하지 않는 자, 내가 찾던 사람이야. 나는 다리우스.",
+      low: "거래는 항상 이익을 따져야 해. 감정 따위에 휘둘리지 말고.",
+      mid: "{플레이어}, 넌 나와 비슷해. 세상의 밝은 면만 보는 척하는 바보들과 달리.",
+      high: "이런 감정은 거래에 방해가 되는데... 네 앞에선 계산이 안 돼.",
+      max: "어둠 속에서 오래 살았어. 따뜻한 게 뭔지 잊었는데... {플레이어}, 넌 나를 바꿔.",
+      gift_low: "흥미롭군. 가져가지.",
+      gift_high: "이런... 취향을 알아? 마음에 들어.",
+      daily_limit: "오늘 거래는 끝났어. 다음에 보자.",
+    },
+    giftAccessoryId: "shadow-pendant",
+    dateDescription: "밤의 뒷골목을 함께 걸었다. 다리우스는 드물게 진심 어린 이야기를 털어놓았다.",
+    romanceEndingId: "romance-darius",
+  },
+  {
+    id: "leon",
+    name: "레온",
+    icon: "🌹",
+    role: "귀족 출신 동기생",
+    gender: "male",
+    description: "느긋하고 여유있는 귀족 남자. 겉보기엔 게으른 것 같지만 예술과 음악에 대한 깊은 조예를 가졌다.",
+    meetCondition: { year: 2, month: 3 },
+    preferStats: { charm: 1, creativity: 1 },
+    difficulty: 3,
+    dialogues: {
+      first: "오, 새 학생이군. 나는 레온이야. 뭐... 딱히 기대는 안 했는데, 네 눈빛이 흥미롭네.",
+      low: "어, {플레이어}? 오늘도 열심히 하는군. 나는 그냥 나무 아래서 쉬려고.",
+      mid: "{플레이어}랑 이야기하면 심심하지가 않아. 이거 드물거든, 나한테.",
+      high: "사실 너한테만 보여주고 싶은 게 있어. 내가 작곡한 거야. 들어볼래?",
+      max: "{플레이어}... 솔직히 말할게. 이 음악, 처음부터 끝까지 네 생각 하면서 만들었어.",
+      gift_low: "어, 고마워. 나쁘지 않은데.",
+      gift_high: "오... 이거 꽤 좋은 안목이잖아. 마음에 들어.",
+      daily_limit: "오늘은 낮잠 자야 해. 내일 연주 들려줄게.",
+    },
+    giftAccessoryId: "rose-brooch",
+    dateDescription: "레온이 연주하는 음악을 들으며 정원에서 조용한 시간을 보냈다.",
+    romanceEndingId: "romance-leon",
+  },
+  {
+    id: "tom",
+    name: "톰",
+    icon: "💪",
+    role: "평민 출신 동기생",
+    gender: "male",
+    description: "열정적이고 순수한 평민 출신 소년. 가난하지만 꿈을 향해 달리는 에너지가 넘친다.",
+    meetCondition: { year: 2, month: 3 },
+    preferStats: { strength: 1, morality: 1 },
+    difficulty: 2,
+    dialogues: {
+      first: "야, 안녕! 나 톰이야! 아카데미 합격했어! 믿겨져?! 너도 새 학생이야?",
+      low: "{플레이어}! 오늘 훈련 엄청 힘들었다. 근데 포기 안 했어! 파이팅!",
+      mid: "있잖아, {플레이어}. 나 힘들 때 네가 옆에 있어줘서 진짜 힘이 됐어.",
+      high: "{플레이어}... 내가 평민이라서 이런 말 하기 어려운데. 그래도 말하고 싶어.",
+      max: "나 {플레이어} 좋아해! 귀족이든 평민이든 상관없잖아! 같이 해줄래?!",
+      gift_low: "어, 고마워! 소중히 쓸게!",
+      gift_high: "이게 얼마짜린지 알아?! 받아도 돼?! 진짜 고마워!!",
+      daily_limit: "오늘 훈련 때문에 지쳐버렸어. 내일 또 보자!",
+    },
+    giftAccessoryId: "friendship-band",
+    dateDescription: "함께 마을 구석구석을 뛰어다니며 오래된 비밀 장소를 발견했다.",
+    romanceEndingId: "romance-tom",
+  },
+]
+
+// NPC 전용 장신구 데이터 (ACCESSORIES에 추가할 것들)
+export const NPC_ACCESSORIES = [
+  { id: "royal-brooch",       name: "왕녀의 브로치",     icon: "👑", rarity: "legendary" as const, obtainMethod: "리아나 호감 100", description: "리아나가 건넨 왕가의 브로치. 따뜻함이 깃들어 있다.", effect: { charm: 8, magicBonus: 10, critChance: 0.06 } },
+  { id: "iron-badge",         name: "에리카의 기사 휘장", icon: "⚔️", rarity: "rare" as const,     obtainMethod: "에리카 호감 100", description: "에리카 교관이 직접 달아준 기사 훈련 휘장.", effect: { attackBonus: 15, defenseBonus: 8 } },
+  { id: "magic-crystal-pin",  name: "세라의 마법 핀",    icon: "✨", rarity: "rare" as const,     obtainMethod: "세라 호감 100",  description: "세라가 마법을 담아 만든 작은 핀.", effect: { magicBonus: 12, xpBonus: 0.15 } },
+  { id: "coin-charm",         name: "미나의 행운 코인",  icon: "🪙", rarity: "uncommon" as const, obtainMethod: "미나 호감 100",  description: "미나가 건넨 행운의 동전 펜던트.", effect: { goldMultiplier: 0.2, hpBonus: 20 } },
+  { id: "knight-emblem",      name: "카이렌의 기사단 문장",icon: "🛡️",rarity: "legendary" as const, obtainMethod: "카이렌 호감 100",description: "카이렌이 직접 떼어준 기사단 문장.", effect: { attackBonus: 12, defenseBonus: 10, critChance: 0.07 } },
+  { id: "shadow-pendant",     name: "다리우스의 그림자 펜던트",icon: "🌑",rarity: "legendary" as const,obtainMethod: "다리우스 호감 100",description: "다리우스가 건넨 정체불명의 펜던트. 어둠의 힘이 깃들어 있다.", effect: { attackBonus: 18, magicBonus: 18, critChance: 0.10 } },
+  { id: "rose-brooch",        name: "레온의 장미 브로치", icon: "🌹", rarity: "rare" as const,     obtainMethod: "레온 호감 100",  description: "레온이 작곡한 음악처럼 우아한 브로치.", effect: { magicBonus: 8, xpBonus: 0.12, goldMultiplier: 0.1 } },
+  { id: "friendship-band",    name: "톰의 우정 팔찌",    icon: "💪", rarity: "uncommon" as const, obtainMethod: "톰 호감 100",    description: "톰이 직접 만든 가죽 팔찌. 온기가 느껴진다.", effect: { hpBonus: 35, attackBonus: 6 } },
+]
+
+// 선물 등급 정의
+export const GIFT_GRADES = {
+  low:    { label: "일반 선물",   affectionGain: 5,  items: ["stress-tea", "healing-potion", "art-supplies"] },
+  mid:    { label: "고급 선물",   affectionGain: 15, items: ["magic-book", "charm-necklace", "wisdom-pendant"] },
+  high:   { label: "희귀 선물",   affectionGain: 30, items: ["holy-water", "combat-manual", "recipe-book"] },
+}
+
 export const SEASONAL_EVENTS: SeasonalEvent[] = [
   {
     id: "spring-flower-festival", season: "spring", title: "꽃축제",
     description: "마을 광장에서 성대한 꽃축제가 열립니다. 알록달록한 꽃들이 가득하고, 다양한 행사가 진행됩니다.",
     choices: [
-      { text: "꽃꽂이 대회에 참가한다", requirements: { creativity: 40 }, outcomes: { description: "아름다운 꽃꽂이로 대상을 수상했습니다! 꽃의 여왕 드레스를 상으로 받았습니다!", statChanges: { creativity: 4, charm: 2 }, goldChange: 80, outfitReward: "flower-crown" } },
+      { text: "꽃꽂이 대회에 참가한다", requirements: { creativity: 100 }, outcomes: { description: "아름다운 꽃꽂이로 대상을 수상했습니다! 꽃의 여왕 드레스를 상으로 받았습니다!", statChanges: { creativity: 4, charm: 2 }, goldChange: 80, outfitReward: "flower-crown" } },
       { text: "꽃을 선물 받는다", outcomes: { description: "누군가가 예쁜 꽃다발을 선물해 주었습니다. 마음이 따뜻해집니다.", statChanges: { charm: 2 }, stressChange: -10 } },
-      { text: "신비로운 꽃을 발견한다", requirements: { magic: 40 }, outcomes: { description: "마법이 깃든 희귀한 꽃을 발견했습니다. 이 꽃은 고대의 비밀과 연결되어 있습니다...", statChanges: { magic: 3 }, worldKnowledgeChange: 5 } },
+      { text: "신비로운 꽃을 발견한다", requirements: { magic: 100 }, outcomes: { description: "마법이 깃든 희귀한 꽃을 발견했습니다. 이 꽃은 고대의 비밀과 연결되어 있습니다...", statChanges: { magic: 3 }, worldKnowledgeChange: 5 } },
     ],
   },
   {
@@ -813,24 +1116,24 @@ export const SEASONAL_EVENTS: SeasonalEvent[] = [
     description: "농부들이 씨앗을 뿌리는 계절입니다. 마을에서 함께 농사를 돕자는 요청이 왔습니다.",
     choices: [
       { text: "열심히 농사를 돕는다", outcomes: { description: "땀 흘려 일한 대가로 보상을 받았습니다. 성실함을 인정받았습니다!", statChanges: { strength: 2, morality: 2 }, goldChange: 50, stressChange: 5 } },
-      { text: "아이들에게 식물 키우기를 가르친다", requirements: { intelligence: 40 }, outcomes: { description: "아이들이 즐거워합니다. 가르치는 보람을 느꼈습니다.", statChanges: { intelligence: 2, charm: 2, morality: 2 } } },
+      { text: "아이들에게 식물 키우기를 가르친다", requirements: { intelligence: 100 }, outcomes: { description: "아이들이 즐거워합니다. 가르치는 보람을 느꼈습니다.", statChanges: { intelligence: 2, charm: 2, morality: 2 } } },
     ],
   },
   {
     id: "summer-beach", season: "summer", title: "바다 축제",
     description: "무더운 여름, 해변에서 축제가 열립니다. 시원한 바닷바람이 불어옵니다.",
     choices: [
-      { text: "수영 대회에 참가한다", requirements: { strength: 45 }, outcomes: { description: "멋진 수영 실력으로 우승했습니다! 해변 원피스를 상으로 받았습니다!", statChanges: { strength: 3, combat: 1 }, goldChange: 60, outfitReward: "swimsuit" } },
+      { text: "수영 대회에 참가한다", requirements: { strength: 110 }, outcomes: { description: "멋진 수영 실력으로 우승했습니다! 해변 원피스를 상으로 받았습니다!", statChanges: { strength: 3, combat: 1 }, goldChange: 60, outfitReward: "swimsuit" } },
       { text: "모래성 짓기 대회에 참가한다", outcomes: { description: "창의적인 모래성을 만들었습니다. 즐거운 시간이었어요!", statChanges: { creativity: 3 }, stressChange: -15 } },
-      { text: "해변에서 이상한 조개를 발견한다", requirements: { magic: 30 }, outcomes: { description: "조개 속에서 고대 바다 신의 메시지가 담긴 진주를 발견했습니다...", statChanges: { magic: 2, faith: 2 }, worldKnowledgeChange: 8 } },
+      { text: "해변에서 이상한 조개를 발견한다", requirements: { magic: 75 }, outcomes: { description: "조개 속에서 고대 바다 신의 메시지가 담긴 진주를 발견했습니다...", statChanges: { magic: 2, faith: 2 }, worldKnowledgeChange: 8 } },
     ],
   },
   {
     id: "summer-ghost", season: "summer", title: "백중 귀신 이야기",
     description: "여름밤, 마을 사람들이 모여 귀신 이야기를 나눕니다. 등골이 서늘해집니다.",
     choices: [
-      { text: "무서운 이야기를 들려준다", requirements: { charm: 35 }, outcomes: { description: "당신의 이야기에 모두가 소름 돋았습니다! 이야기꾼으로 유명해졌어요.", statChanges: { charm: 3, creativity: 2 } } },
-      { text: "진짜 귀신을 찾아 나선다", requirements: { combat: 30, faith: 30 }, outcomes: { description: "숲에서 떠도는 영혼을 만났습니다. 그 영혼은 세계의 비밀 일부를 알려주었습니다...", statChanges: { faith: 4, magic: 2 }, worldKnowledgeChange: 10, stressChange: 10 } },
+      { text: "무서운 이야기를 들려준다", requirements: { charm: 90 }, outcomes: { description: "당신의 이야기에 모두가 소름 돋았습니다! 이야기꾼으로 유명해졌어요.", statChanges: { charm: 3, creativity: 2 } } },
+      { text: "진짜 귀신을 찾아 나선다", requirements: { combat: 75, faith: 75 }, outcomes: { description: "숲에서 떠도는 영혼을 만났습니다. 그 영혼은 세계의 비밀 일부를 알려주었습니다...", statChanges: { faith: 4, magic: 2 }, worldKnowledgeChange: 10, stressChange: 10 } },
       { text: "무서워서 집에 간다", outcomes: { description: "푹 자고 일어났습니다. 때로는 쉬는 것도 중요하죠.", stressChange: -10 } },
     ],
   },
@@ -838,18 +1141,18 @@ export const SEASONAL_EVENTS: SeasonalEvent[] = [
     id: "fall-harvest", season: "fall", title: "수확제",
     description: "풍성한 수확을 축하하는 축제입니다. 마을 전체가 기쁨에 넘칩니다.",
     choices: [
-      { text: "요리 대회에 참가한다", requirements: { cooking: 50 }, outcomes: { description: "맛있는 요리로 대상을 수상했습니다! 요리사 복장을 상으로 받았습니다!", statChanges: { cooking: 4, charm: 2 }, goldChange: 100, outfitReward: "chef" } },
+      { text: "요리 대회에 참가한다", requirements: { cooking: 125 }, outcomes: { description: "맛있는 요리로 대상을 수상했습니다! 요리사 복장을 상으로 받았습니다!", statChanges: { cooking: 4, charm: 2 }, goldChange: 100, outfitReward: "chef" } },
       { text: "추수를 돕는다", outcomes: { description: "열심히 일한 덕분에 보상을 받았습니다. 몸이 건강해진 기분이에요.", statChanges: { strength: 2, housework: 2 }, goldChange: 70 } },
-      { text: "고대 수확 의식에 참여한다", requirements: { faith: 50 }, outcomes: { description: "오래된 의식을 통해 대지의 정령과 교감했습니다. 이 세계의 순환에 대해 깊이 이해하게 되었습니다.", statChanges: { faith: 5, magic: 3 }, worldKnowledgeChange: 12 } },
+      { text: "고대 수확 의식에 참여한다", requirements: { faith: 125 }, outcomes: { description: "오래된 의식을 통해 대지의 정령과 교감했습니다. 이 세계의 순환에 대해 깊이 이해하게 되었습니다.", statChanges: { faith: 5, magic: 3 }, worldKnowledgeChange: 12 } },
     ],
   },
   {
     id: "fall-moon", season: "fall", title: "보름달 밤",
     description: "크고 밝은 보름달이 떴습니다. 달빛이 세상을 신비롭게 물들입니다.",
     choices: [
-      { text: "달을 보며 시를 짓는다", requirements: { creativity: 35 }, outcomes: { description: "아름다운 시가 완성되었습니다. 영감이 샘솟습니다.", statChanges: { creativity: 4, charm: 2 } } },
+      { text: "달을 보며 시를 짓는다", requirements: { creativity: 90 }, outcomes: { description: "아름다운 시가 완성되었습니다. 영감이 샘솟습니다.", statChanges: { creativity: 4, charm: 2 } } },
       { text: "달빛 아래 명상한다", outcomes: { description: "마음이 평온해졌습니다. 내면의 힘이 강해진 것 같아요.", stressChange: -20, statChanges: { faith: 2 } } },
-      { text: "달의 마법을 연구한다", requirements: { magic: 50, intelligence: 50 }, outcomes: { description: "달은 단순한 천체가 아닙니다. 고대 여신이 남긴 마법의 거울이며, 세계의 비밀을 비추고 있습니다...", statChanges: { magic: 5, intelligence: 3 }, worldKnowledgeChange: 15 } },
+      { text: "달의 마법을 연구한다", requirements: { magic: 125, intelligence: 125 }, outcomes: { description: "달은 단순한 천체가 아닙니다. 고대 여신이 남긴 마법의 거울이며, 세계의 비밀을 비추고 있습니다...", statChanges: { magic: 5, intelligence: 3 }, worldKnowledgeChange: 15 } },
     ],
   },
   {
@@ -858,49 +1161,153 @@ export const SEASONAL_EVENTS: SeasonalEvent[] = [
     choices: [
       { text: "눈싸움을 한다", outcomes: { description: "신나게 눈싸움을 했습니다! 친구들과 더 가까워졌어요.", statChanges: { combat: 1, strength: 1 }, stressChange: -15 } },
       { text: "눈사람을 만든다", outcomes: { description: "예쁜 눈사람이 완성되었습니다. 창작의 기쁨을 느꼈어요.", statChanges: { creativity: 2 }, stressChange: -10 } },
-      { text: "눈 속에서 빛나는 것을 발견한다", requirements: { magic: 35 }, outcomes: { description: "얼어붙은 요정의 눈물을 발견했습니다. 그 안에 고대의 기억이 담겨 있었습니다...", statChanges: { magic: 3 }, worldKnowledgeChange: 7 } },
+      { text: "눈 속에서 빛나는 것을 발견한다", requirements: { magic: 90 }, outcomes: { description: "얼어붙은 요정의 눈물을 발견했습니다. 그 안에 고대의 기억이 담겨 있었습니다...", statChanges: { magic: 3 }, worldKnowledgeChange: 7 } },
     ],
   },
   {
     id: "winter-solstice", season: "winter", title: "동지 축제",
     description: "가장 긴 밤, 사람들이 모여 빛의 귀환을 축하합니다. 신성한 기운이 감돕니다.",
     choices: [
-      { text: "성가대에서 노래한다", requirements: { charm: 40 }, outcomes: { description: "아름다운 노래로 모두를 감동시켰습니다. 감사의 선물을 받았어요.", statChanges: { charm: 3, faith: 3 }, goldChange: 50 } },
+      { text: "성가대에서 노래한다", requirements: { charm: 100 }, outcomes: { description: "아름다운 노래로 모두를 감동시켰습니다. 감사의 선물을 받았어요.", statChanges: { charm: 3, faith: 3 }, goldChange: 50 } },
       { text: "가난한 이웃을 돕는다", outcomes: { description: "따뜻한 마음을 나누었습니다. 진정한 행복을 느꼈어요.", statChanges: { morality: 4, faith: 2 }, goldChange: -30 } },
-      { text: "고대 동지 의식에 참여한다", requirements: { faith: 60, magic: 60 }, outcomes: { description: "어둠과 빛의 균형 속에서 세계의 진정한 모습을 보았습니다. 신녀 복장을 하사받았습니다!", statChanges: { faith: 5, magic: 5 }, worldKnowledgeChange: 20, outfitReward: "priestess" } },
+      { text: "고대 동지 의식에 참여한다", requirements: { faith: 150, magic: 150 }, outcomes: { description: "어둠과 빛의 균형 속에서 세계의 진정한 모습을 보았습니다. 신녀 복장을 하사받았습니다!", statChanges: { faith: 5, magic: 5 }, worldKnowledgeChange: 20, outfitReward: "priestess" } },
     ],
+  },
+
+  // ── 아카데미 이벤트 ──────────────────────────────────────────
+  {
+    id: "academy-entrance", season: "spring", minYear: 2, maxYear: 2,
+    title: "🏫 아카데미 입학식",
+    description: "2년차 봄, 왕립 아카데미 입학식이 열렸다. 화려한 홀에 수많은 신입생들이 모였다. 어떻게 입학식에 임할 것인가?",
+    choices: [
+      { text: "당당하게 앞줄에 선다", requirements: { charm: 75 },
+        outcomes: { description: "눈에 띄는 등장으로 많은 학생들의 시선을 끌었다. 교장 선생님이 칭찬을 건넸다.", statChanges: { charm: 3, morality: 1 } } },
+      { text: "조용히 자리를 지킨다",
+        outcomes: { description: "차분하게 식을 지켜보며 아카데미를 관찰했다. 여러 학생들의 얼굴을 기억했다.", statChanges: { intelligence: 2 } } },
+      { text: "소란을 일으켜 주목받는다",
+        outcomes: { description: "의도치 않은 소동으로 교관에게 첫날부터 경고를 받았다. 하지만 유명해졌다.", statChanges: { charm: 2, morality: -3 } } },
+    ]
+  },
+  {
+    id: "academy-midterm", season: "summer", minYear: 2,
+    title: "📝 아카데미 중간 시험",
+    description: "여름, 아카데미 중간 시험이 다가왔다. 전투, 마법, 학문 세 과목으로 구성된 종합 시험이다.",
+    choices: [
+      { text: "열심히 준비해서 전 과목 응시", requirements: { intelligence: 100, combat: 75 },
+        outcomes: { description: "모든 과목에서 우수한 성적을 거뒀다! 교관들이 극찬을 아끼지 않았다.", statChanges: { intelligence: 3, combat: 2, charm: 2 }, goldChange: 100 } },
+      { text: "잘 아는 과목만 응시",
+        outcomes: { description: "선택한 과목에서 좋은 결과를 얻었다. 집중 학습의 효과가 나타났다.", statChanges: { intelligence: 4 } } },
+      { text: "커닝을 시도한다",
+        outcomes: { description: "들키지는 않았지만 마음이 불편하다. 성적은 나왔지만 찜찜하다.", statChanges: { intelligence: 1, morality: -5 }, goldChange: 50 } },
+    ]
+  },
+  {
+    id: "academy-ball", season: "fall", minYear: 2,
+    title: "🎭 아카데미 가을 무도회",
+    description: "가을, 아카데미 전통 무도회가 열렸다. 드레스와 예복이 가득한 화려한 밤. 파트너를 구해야 한다.",
+    choices: [
+      { text: "호감도 높은 NPC에게 신청한다", requirements: { charm: 125 },
+        outcomes: { description: "아름다운 밤을 함께했다. 춤을 추며 서로의 마음을 확인한 것 같다.", statChanges: { charm: 4, morality: 2 }, outfitReward: "party-dress" } },
+      { text: "혼자 우아하게 즐긴다",
+        outcomes: { description: "혼자지만 당당하게 무도회를 즐겼다. 매력이 빛을 발했다.", statChanges: { charm: 3 } } },
+      { text: "무도회 뒤편에서 정보를 모은다", requirements: { intelligence: 90 },
+        outcomes: { description: "각종 귀족들의 대화를 엿들으며 유용한 정보를 수집했다.", statChanges: { intelligence: 3 }, goldChange: 80 } },
+    ]
+  },
+  {
+    id: "academy-finals", season: "winter", minYear: 2,
+    title: "🎓 아카데미 기말 시험 및 시상식",
+    description: "겨울, 학기 마지막 시험과 시상식이 열렸다. 이 해의 마무리를 어떻게 할 것인가?",
+    choices: [
+      { text: "전력을 다해 최우수상을 노린다", requirements: { intelligence: 125, combat: 100 },
+        outcomes: { description: "최우수 학생으로 선정되었다! 트로피와 함께 장학금을 받았다.", statChanges: { intelligence: 4, charm: 3 }, goldChange: 200 } },
+      { text: "적당히 마무리한다",
+        outcomes: { description: "무난하게 학기를 마쳤다. 그래도 한 해 동안 많이 성장했다.", statChanges: { intelligence: 2 } } },
+      { text: "시상식에서 라이벌과 대결한다",
+        outcomes: { description: "예상치 못한 대결로 화제가 됐다. 결과는 무승부, 하지만 강렬한 인상을 남겼다.", statChanges: { combat: 3, charm: 2 } } },
+    ]
+  },
+  // ── 도덕 분기 이벤트 ──────────────────────────────────────────
+  {
+    id: "dark-merchant-visit", season: "summer",
+    title: "🌑 수상한 방문자",
+    description: "늦은 밤, 수상한 남자가 접근했다. '좋은 거래를 제안하지. 금지된 마법서... 관심 있어?'",
+    choices: [
+      { text: "거절한다",
+        outcomes: { description: "당당하게 거절했다. 남자는 쓴웃음을 짓고 사라졌다.", statChanges: { morality: 3 } } },
+      { text: "내용을 듣기만 한다",
+        outcomes: { description: "호기심에 이야기를 들었다. 내용이 상당히 구미가 당긴다...", statChanges: { intelligence: 1, morality: -2 } } },
+      { text: "거래에 응한다",
+        outcomes: { description: "금지된 마법서를 손에 넣었다. 강력하지만... 올바른 선택이었을까?", statChanges: { magic: 5, morality: -10 }, goldChange: -150 } },
+    ]
+  },
+  {
+    id: "morality-test-help", season: "spring",
+    title: "🤝 골목의 위기",
+    description: "골목에서 불량배에게 괴롭힘 당하는 아이를 발견했다. 어떻게 할 것인가?",
+    choices: [
+      { text: "직접 나서서 구해준다", requirements: { combat: 50 },
+        outcomes: { description: "불량배를 쫓아내고 아이를 구했다. 아이의 감사 인사가 마음을 따뜻하게 한다.", statChanges: { morality: 5, combat: 1 } } },
+      { text: "관리인에게 신고한다",
+        outcomes: { description: "어른에게 신고해 상황을 해결했다. 현명한 판단이었다.", statChanges: { morality: 3, intelligence: 1 } } },
+      { text: "무시하고 지나간다",
+        outcomes: { description: "모른 척하고 지나쳤다. 마음 한구석이 불편하다.", statChanges: { morality: -5 } } },
+      { text: "불량배와 함께 협박한다",
+        outcomes: { description: "아이에게서 용돈을 뜯었다. 분명히 잘못된 일이지만...", statChanges: { morality: -15 }, goldChange: 30 } },
+    ]
+  },
+  {
+    id: "royal-corruption", season: "fall",
+    title: "🎭 왕실의 비밀",
+    description: "우연히 왕실 귀족의 부정부패 현장을 목격했다. 증거를 손에 넣었다. 어떻게 처리할 것인가?",
+    choices: [
+      { text: "당국에 신고한다", requirements: { morality: 50 },
+        outcomes: { description: "정의를 선택했다. 귀족은 처벌받고, {플레이어}의 이름이 왕국에 알려졌다.", statChanges: { morality: 10, charm: 3 } } },
+      { text: "증거를 팔아 이득을 취한다",
+        outcomes: { description: "귀족에게 거액을 받고 증거를 팔았다. 도덕적으로는 문제지만 실리를 챙겼다.", statChanges: { morality: -12 }, goldChange: 500 } },
+      { text: "협박 카드로 활용한다",
+        outcomes: { description: "정보를 활용해 지속적인 이익을 챙기기로 했다. 위험한 게임의 시작이다.", statChanges: { morality: -20, intelligence: 2 }, goldChange: 200 } },
+    ]
   },
 ]
 
 // Dungeon Enemies (per dungeon)
 export const DUNGEON_ENEMIES: DungeonEnemy[] = [
   // ── 변방의 숲 ──────────────────────────────────────────
-  { id: "slime",          name: "슬라임",       icon: "🟢", hp: 40,  attack: 8,  defense: 2,  magicResist: 3,  goldReward: 10, expReward: { combat: 1 }, xp: 8,       dungeonId: "forest",   materialDrop: "slime-gel",     floorRange: [1,10] },
-  { id: "goblin",         name: "고블린",       icon: "👺", hp: 55,  attack: 12, defense: 5,  magicResist: 3,  goldReward: 18, expReward: { combat: 1, strength: 1 }, xp: 12, dungeonId: "forest",   materialDrop: "goblin-ear",    floorRange: [1,15] },
-  { id: "wolf",           name: "숲늑대",       icon: "🐺", hp: 65,  attack: 16, defense: 4,  magicResist: 2,  goldReward: 22, expReward: { combat: 2 }, xp: 18,      dungeonId: "forest",   materialDrop: "wolf-fang",     floorRange: [5,18] },
-  { id: "skeleton",       name: "해골 병사",    icon: "💀", hp: 75,  attack: 18, defense: 8,  magicResist: 0,  goldReward: 28, expReward: { combat: 2 }, xp: 22,      dungeonId: "forest",   materialDrop: "skeleton-bone", floorRange: [10,19] },
-  { id: "boss-forest",    name: "숲의 수호자",  icon: "🐉", hp: 200, attack: 28, defense: 15, magicResist: 10, goldReward: 200, expReward: { combat: 8, strength: 4 }, xp: 120, dungeonId: "forest",   materialDrop: "dragon-scale",  floorRange: [20,20], isBoss: true },
+  { id: "slime",          name: "슬라임",       icon: "🟢", hp: 160,  attack: 24,  defense: 6,  magicResist: 6,  goldReward: 10, expReward: { combat: 1 }, xp: 8,       dungeonId: "forest",   materialDrop: "slime-gel",     floorRange: [1,10] },
+  { id: "goblin",         name: "고블린",       icon: "👺", hp: 220,  attack: 36, defense: 10,  magicResist: 6,  goldReward: 18, expReward: { combat: 1, strength: 1 }, xp: 12, dungeonId: "forest",   materialDrop: "goblin-ear",    floorRange: [1,15] },
+  { id: "wolf",           name: "숲늑대",       icon: "🐺", hp: 260,  attack: 48, defense: 8,  magicResist: 4,  goldReward: 22, expReward: { combat: 2 }, xp: 18,      dungeonId: "forest",   materialDrop: "wolf-fang",     floorRange: [5,18] },
+  { id: "skeleton",       name: "해골 병사",    icon: "💀", hp: 300,  attack: 54, defense: 18,  magicResist: 8,  goldReward: 20, expReward: { combat: 2 }, xp: 22,      dungeonId: "forest",   materialDrop: "skeleton-bone", floorRange: [10,19] },
+  { id: "boss-forest",    name: "숲의 수호자",  icon: "🐉", hp: 1000, attack: 84, defense: 40, magicResist: 30, goldReward: 100, expReward: { combat: 8, strength: 4 }, xp: 120, dungeonId: "forest",   materialDrop: "dragon-scale",  floorRange: [20,20], isBoss: true },
   // ── 설원 골짜기 ───────────────────────────────────────
-  { id: "frost-wolf",     name: "서리늑대",     icon: "🐺", hp: 90,  attack: 22, defense: 8,  magicResist: 10, goldReward: 35, expReward: { combat: 2, strength: 1 }, xp: 28, dungeonId: "valley",   materialDrop: "frost-crystal", floorRange: [1,15] },
-  { id: "ice-troll",      name: "빙결 트롤",    icon: "🧟", hp: 140, attack: 28, defense: 20, magicResist: 8,  goldReward: 55, expReward: { combat: 3, strength: 2 }, xp: 40, dungeonId: "valley",   materialDrop: "troll-hide",    floorRange: [5,19] },
-  { id: "orc",            name: "오크 전사",    icon: "👹", hp: 110, attack: 25, defense: 12, magicResist: 5,  goldReward: 45, expReward: { combat: 3 }, xp: 35,      dungeonId: "valley",   materialDrop: "orc-tusk",      floorRange: [8,19] },
-  { id: "boss-valley",    name: "빙룡",         icon: "❄️", hp: 350, attack: 42, defense: 22, magicResist: 25, goldReward: 350, expReward: { combat: 10, magic: 5 }, xp: 200, dungeonId: "valley",   materialDrop: "frost-core",    floorRange: [20,20], isBoss: true },
+  { id: "frost-wolf",     name: "서리늑대",     icon: "🐺", hp: 360,  attack: 66, defense: 10,  magicResist: 8, goldReward: 25, expReward: { combat: 2, strength: 1 }, xp: 28, dungeonId: "valley",   materialDrop: "frost-crystal", floorRange: [1,15] },
+  { id: "ice-troll",      name: "빙결 트롤",    icon: "🧟", hp: 560, attack: 84, defense: 20, magicResist: 12,  goldReward: 40, expReward: { combat: 3, strength: 2 }, xp: 40, dungeonId: "valley",   materialDrop: "troll-hide",    floorRange: [5,19] },
+  { id: "orc",            name: "오크 전사",    icon: "👹", hp: 440, attack: 75, defense: 16, magicResist: 10,  goldReward: 30, expReward: { combat: 3 }, xp: 35,      dungeonId: "valley",   materialDrop: "orc-tusk",      floorRange: [8,19] },
+  { id: "boss-valley",    name: "빙룡",         icon: "❄️", hp: 1750, attack: 126, defense: 60, magicResist: 40, goldReward: 200, expReward: { combat: 10, magic: 5 }, xp: 200, dungeonId: "valley",   materialDrop: "frost-core",    floorRange: [20,20], isBoss: true },
   // ── 핏빛 성채 ──────────────────────────────────────────
-  { id: "fortress-wraith",name: "성채 망령",    icon: "👻", hp: 100, attack: 35, defense: 0,  magicResist: 30, goldReward: 60, expReward: { magic: 3, faith: 2 }, xp: 45, dungeonId: "fortress", materialDrop: "wraith-essence",floorRange: [1,15] },
-  { id: "dark-knight",    name: "암흑 기사",    icon: "🖤", hp: 160, attack: 40, defense: 25, magicResist: 15, goldReward: 80, expReward: { combat: 4, strength: 2 }, xp: 55, dungeonId: "fortress", floorRange: [5,19] },
-  { id: "gargoyle",       name: "가고일",       icon: "🗿", hp: 130, attack: 32, defense: 22, magicResist: 18, goldReward: 70, expReward: { combat: 3, strength: 2 }, xp: 50, dungeonId: "fortress", floorRange: [8,19] },
-  { id: "boss-fortress",  name: "성채의 군주",  icon: "♦️", hp: 550, attack: 55, defense: 30, magicResist: 20, goldReward: 500, expReward: { combat: 12, strength: 5 }, xp: 300, dungeonId: "fortress", materialDrop: "blood-ruby",    floorRange: [20,20], isBoss: true },
+  { id: "fortress-wraith",name: "성채 망령",    icon: "👻", hp: 400, attack: 105, defense: 15,  magicResist: 25, goldReward: 40, expReward: { magic: 3, faith: 2 }, xp: 45, dungeonId: "fortress", materialDrop: "wraith-essence",floorRange: [1,15] },
+  { id: "dark-knight",    name: "암흑 기사",    icon: "🖤", hp: 640, attack: 120, defense: 30, magicResist: 15, goldReward: 50, expReward: { combat: 4, strength: 2 }, xp: 55, dungeonId: "fortress", floorRange: [5,19] },
+  { id: "gargoyle",       name: "가고일",       icon: "🗿", hp: 520, attack: 96, defense: 20, magicResist: 12, goldReward: 40, expReward: { combat: 3, strength: 2 }, xp: 50, dungeonId: "fortress", floorRange: [8,19] },
+  { id: "boss-fortress",  name: "성채의 군주",  icon: "♦️", hp: 2750, attack: 165, defense: 60, magicResist: 35, goldReward: 300, expReward: { combat: 12, strength: 5 }, xp: 300, dungeonId: "fortress", materialDrop: "blood-ruby",    floorRange: [20,20], isBoss: true },
   // ── 검은 세계수 ───────────────────────────────────────
-  { id: "dark-treant",    name: "암흑 나무정령",icon: "🌑", hp: 180, attack: 45, defense: 30, magicResist: 20, goldReward: 90, expReward: { combat: 4, magic: 3 }, xp: 65, dungeonId: "worldtree",materialDrop: "dark-sap",      floorRange: [1,15] },
-  { id: "fallen-angel",   name: "타락 천사",    icon: "😇", hp: 200, attack: 55, defense: 20, magicResist: 35, goldReward: 110, expReward: { faith: 4, magic: 4 }, xp: 75, dungeonId: "worldtree",floorRange: [8,19] },
-  { id: "boss-worldtree", name: "세계수의 어둠",icon: "🌿", hp: 750, attack: 65, defense: 35, magicResist: 35, goldReward: 700, expReward: { combat: 12, magic: 8 }, xp: 400, dungeonId: "worldtree",materialDrop: "world-root",    floorRange: [20,20], isBoss: true },
+  { id: "dark-treant",    name: "암흑 나무정령",icon: "🌑", hp: 720, attack: 135, defense: 25, magicResist: 18, goldReward: 60, expReward: { combat: 4, magic: 3 }, xp: 65, dungeonId: "worldtree",materialDrop: "dark-sap",      floorRange: [1,15] },
+  { id: "fallen-angel",   name: "타락 천사",    icon: "😇", hp: 800, attack: 165, defense: 30, magicResist: 25, goldReward: 70, expReward: { faith: 4, magic: 4 }, xp: 75, dungeonId: "worldtree",floorRange: [8,19] },
+  { id: "boss-worldtree", name: "세계수의 어둠",icon: "🌿", hp: 3750, attack: 195, defense: 70, magicResist: 50, goldReward: 400, expReward: { combat: 12, magic: 8 }, xp: 400, dungeonId: "worldtree",materialDrop: "world-root",    floorRange: [20,20], isBoss: true },
   // ── 세계의 끝 ──────────────────────────────────────────
-  { id: "seraph-guardian",name: "세라핌 수호자",icon: "🌟", hp: 220, attack: 60, defense: 25, magicResist: 45, goldReward: 130, expReward: { faith: 5, magic: 4 }, xp: 90, dungeonId: "worldsend",materialDrop: "divine-feather",floorRange: [1,19] },
-  { id: "boss-worldsend", name: "여신의 그림자",icon: "✨", hp: 900,  attack: 72, defense: 40, magicResist: 45, goldReward: 900, expReward: { faith: 12, magic: 10, intelligence: 8 }, xp: 550, dungeonId: "worldsend", materialDrop: "goddess-tear", floorRange: [20,20], isBoss: true },
+  { id: "seraph-guardian",name: "세라핌 수호자",icon: "🌟", hp: 880, attack: 180, defense: 50, magicResist: 90, goldReward: 130, expReward: { faith: 5, magic: 4 }, xp: 90, dungeonId: "worldsend",materialDrop: "divine-feather",floorRange: [1,29] },
+  { id: "boss-worldsend", name: "여신의 그림자",icon: "✨", hp: 4500, attack: 216, defense: 80, magicResist: 90, goldReward: 900, expReward: { faith: 12, magic: 10, intelligence: 8 }, xp: 550, dungeonId: "worldsend", materialDrop: "goddess-tear", floorRange: [30,30], isBoss: true },
   // ── 무저갱 ────────────────────────────────────────────
-  { id: "void-shade",     name: "공허의 그림자",icon: "⬛", hp: 250, attack: 65, defense: 28, magicResist: 35, goldReward: 150, expReward: { combat: 5, magic: 5 }, xp: 100, dungeonId: "abyss",    materialDrop: "void-shard",    floorRange: [1,90] },
-  { id: "abyss-demon",    name: "심연의 악마",  icon: "😈", hp: 300, attack: 75, defense: 30, magicResist: 30, goldReward: 200, expReward: { combat: 6, strength: 4 }, xp: 120, dungeonId: "abyss",    floorRange: [10,90] },
-  { id: "boss-abyss",     name: "마왕의 현신",  icon: "🕳️", hp: 1200, attack: 85,  defense: 50, magicResist: 50, goldReward: 2000, expReward: { combat: 20, magic: 15, faith: 10 }, xp: 999, dungeonId: "abyss", materialDrop: "abyss-core", floorRange: [99,99], isBoss: true },
+  { id: "void-shade",     name: "공허의 그림자",icon: "⬛", hp: 1000, attack: 195, defense: 35, magicResist: 40, goldReward: 100, expReward: { combat: 5, magic: 5 }, xp: 100, dungeonId: "abyss",    materialDrop: "void-shard",    floorRange: [1,90] },
+  { id: "abyss-demon",    name: "심연의 악마",  icon: "😈", hp: 1200, attack: 225, defense: 40, magicResist: 50, goldReward: 120, expReward: { combat: 6, strength: 4 }, xp: 120, dungeonId: "abyss",    floorRange: [10,90] },
+  { id: "boss-abyss",     name: "마왕의 현신",  icon: "🕳️", hp: 6000, attack: 255,  defense: 90, magicResist: 70, goldReward: 600, expReward: { combat: 20, magic: 15, faith: 10 }, xp: 999, dungeonId: "abyss", materialDrop: "abyss-core", floorRange: [99,99], isBoss: true },
+
+  // ── 특수 스토리 적 ──────────────────────────────────────────────
+  { id: "goddess-combat",    name: "여신",           icon: "☀️",  hp: 999999, attack: 999, defense: 999, magicResist: 999, goldReward: 0, expReward: {}, xp: 0,
+    dungeonId: "worldsend", floorRange: [30,30], isBoss: true,
+    description: "거역할 수 없는 절대적 존재. 모든 공격이 빗나간다..." },
+  { id: "demon-king",        name: "마왕",           icon: "👿",  hp: 8000,  attack: 150, defense: 80,  magicResist: 70,  goldReward: 2000, expReward: { combat: 30, magic: 20, strength: 15 }, xp: 5000,
+    dungeonId: "abyss",     floorRange: [50,50], isBoss: true, materialDrop: "abyss-core",
+    description: "세상을 지배하는 어둠의 왕. 극한의 전투력을 가졌다." },
 ]
 
 // Dungeon Encounters — 공통 3개 + 던전별 테마 이벤트 2개씩
@@ -923,7 +1330,7 @@ export const DUNGEON_ENCOUNTERS: DungeonEncounter[] = [
     ]},
 
   // ── 변방의 숲 전용 ────────────────────────────────────────────────────────
-  { id: "forest-fairy", type: "fairy", title: "길 잃은 요정", description: "작고 파란 빛의 요정이 눈물을 흘리고 있다. '길을 잃었어... 도와줘.'", icon: "🧚", floorRange: [1,19],
+  { id: "forest-fairy", type: "fairy", title: "길 잃은 요정", description: "작고 파란 빛의 요정이 눈물을 흘리고 있다. '길을 잃었어... 도와줘.'", icon: "🧚", floorRange: [1,29],
     choices: [
       { text: "길을 안내해준다", outcomes: { description: "'고마워! 선물이야.' 요정이 작은 빛을 남기고 사라진다. HP가 회복됐다!", healthChange: 30, statChanges: { charm: 1 }, nextFloor: true } },
       { text: "요정 언어로 말을 건다", requirements: { magic: 25 }, outcomes: { description: "요정이 기뻐하며 마법을 가르쳐준다!", statChanges: { magic: 3 }, nextFloor: true } },
@@ -937,7 +1344,7 @@ export const DUNGEON_ENCOUNTERS: DungeonEncounter[] = [
     ]},
 
   // ── 설원 골짜기 전용 ──────────────────────────────────────────────────────
-  { id: "valley-survivor", type: "secret", title: "조난자", description: "눈보라 속에서 반쯤 얼어붙은 탐험가를 발견했다. '제발... 살려줘...'", icon: "🧊", floorRange: [1,19],
+  { id: "valley-survivor", type: "secret", title: "조난자", description: "눈보라 속에서 반쯤 얼어붙은 탐험가를 발견했다. '제발... 살려줘...'", icon: "🧊", floorRange: [1,29],
     choices: [
       { text: "불을 피워 데워준다", outcomes: { description: "탐험가가 회복하며 감사의 표시로 지도를 줬다! 앞길이 쉬워진다.", goldChange: 60, nextFloor: true } },
       { text: "가진 물약을 준다", requirements: { faith: 20 }, outcomes: { description: "탐험가가 살아났다. '평생 은인을 잊지 않겠소!' 축복을 받았다.", statChanges: { morality: 2, faith: 1 }, nextFloor: true } },
@@ -951,7 +1358,7 @@ export const DUNGEON_ENCOUNTERS: DungeonEncounter[] = [
     ]},
 
   // ── 핏빛 성채 전용 ────────────────────────────────────────────────────────
-  { id: "fortress-prisoner", type: "secret", title: "지하 감옥", description: "낡은 감옥 안에 한 여인이 갇혀있다. '구해주세요... 마왕의 부하들이...'", icon: "⛓️", floorRange: [1,19],
+  { id: "fortress-prisoner", type: "secret", title: "지하 감옥", description: "낡은 감옥 안에 한 여인이 갇혀있다. '구해주세요... 마왕의 부하들이...'", icon: "⛓️", floorRange: [1,29],
     choices: [
       { text: "잠금장치를 부순다", requirements: { strength: 40 }, outcomes: { description: "여인을 구해냈다! '이 열쇠가 도움이 될 거예요.' 황금 열쇠를 받았다!", goldChange: 150, nextFloor: true } },
       { text: "자물쇠를 해제한다", requirements: { intelligence: 45 }, outcomes: { description: "교묘히 자물쇠를 따서 구해냈다. 여인이 비밀통로를 알려준다!", statChanges: { combat: 2 }, nextFloor: true } },
@@ -965,7 +1372,7 @@ export const DUNGEON_ENCOUNTERS: DungeonEncounter[] = [
     ]},
 
   // ── 검은 세계수 전용 ──────────────────────────────────────────────────────
-  { id: "worldtree-corruption", type: "secret", title: "부패한 나무의 기억", description: "세계수 뿌리에 손을 대자 흔들리는 기억이 흘러든다. 이 나무가... 울고 있다.", icon: "🌑", floorRange: [1,19],
+  { id: "worldtree-corruption", type: "secret", title: "부패한 나무의 기억", description: "세계수 뿌리에 손을 대자 흔들리는 기억이 흘러든다. 이 나무가... 울고 있다.", icon: "🌑", floorRange: [1,29],
     choices: [
       { text: "기억을 받아들인다", requirements: { faith: 45 }, outcomes: { description: "세계수의 고통을 이해했다. 세계에 대한 이해가 깊어진다.", statChanges: { faith: 3, magic: 2 }, nextFloor: true } },
       { text: "정화의 기도를 올린다", requirements: { faith: 55, morality: 50 }, outcomes: { description: "한 가지 뿌리가 정화됐다. 세계수가 빛을 발한다.", statChanges: { faith: 5 }, healthChange: 40, nextFloor: true } },
@@ -1005,48 +1412,176 @@ export const DUNGEON_ENCOUNTERS: DungeonEncounter[] = [
       { text: "'나는 사라지지 않는다'고 선언한다", requirements: { morality: 60 }, outcomes: { description: "공허가 물러선다. 의지가 어둠을 밀어냈다.", statChanges: { combat: 3, morality: 2 }, nextFloor: true } },
       { text: "공허의 힘을 받아들인다", requirements: { magic: 70 }, outcomes: { description: "공허의 힘이 마법에 스며든다. 강해졌지만 무언가를 잃은 것 같다.", statChanges: { magic: 7, faith: -3 }, worldKnowledgeChange: 20, nextFloor: true } },
     ]},
+
+  // ══ 스토리 이벤트 ══════════════════════════════════════════════
+  // 세계의 끝 30층: 여신과의 만남
+  {
+    id: "worldsend-goddess-final", type: "goddess" as const,
+    title: "☀️ 여신의 현현",
+    description: "세계의 끝. 30층 심연 너머, 눈부신 빛과 함께 여신이 모습을 드러냈다.\n\n'돌아온 것을 환영하노라, 용감한 아이여. 아직 준비가 되지 않았다면... 돌아가야 한다.'",
+    icon: "☀️", floorRange: [30, 30],
+    choices: [
+      {
+        text: "「마왕의 흉갑을 장착하고 나타남」 '저는 준비가 되었습니다.'",
+        requirements: { equippedOutfit: "demonking-armor" },
+        outcomes: {
+          description: "여신이 조용히 눈물을 흘렸다.\n\n'...마왕의 것을 걸치고 나를 찾아오다니. 그이가 아직 당신을 기억하고 있구나.'\n\n여신은 눈물 한 방울을 손바닥에 담아 건넸다. 따뜻하고 눈부셨다.",
+          setFlag: "met-goddess-with-armor",
+          specialItem: "goddess-tear-blessed",
+          endDungeon: true,
+        }
+      },
+      {
+        text: "「마왕의 것을 얻고 다시 돌아오겠습니다.」",
+        requirements: { flag: "met-demonking" },
+        outcomes: {
+          description: "'그이를 만났단 말인가... 그렇다면 분명 길을 찾을 수 있을 것이야. 다시 나를 찾아오너라.'",
+          setFlag: "met-goddess",
+          endDungeon: true,
+        }
+      },
+      {
+        text: "'저는 계속 전진하겠습니다.'",
+        outcomes: {
+          description: "'...무모한 아이로구나. 하지만 그 의지만큼은 인정하지.'\n\n여신이 한 걸음 물러서며 전투 태세를 취했다. 눈부신 빛이 공간을 가득 채웠다.",
+          setFlag: "met-goddess",
+          startCombat: "goddess-combat",
+        }
+      },
+      {
+        text: "'...돌아가겠습니다.'",
+        outcomes: {
+          description: "'현명한 선택이야. 준비가 되었을 때 다시 오너라.'",
+          setFlag: "met-goddess",
+          endDungeon: true,
+        }
+      },
+    ]
+  },
+
+  // 무저갱 50층: 마왕과의 만남
+  {
+    id: "abyss-demonking-final", type: "demonking" as const,
+    title: "👿 마왕과의 만남",
+    description: "무저갱 50층. 어둠 속에서 거대한 기척이 느껴졌다.\n\n'...용사여. 이 심연의 끝까지 당도하였는가. 그 의지만큼은 인정하지.'\n\n마왕이 천천히 몸을 일으켰다.",
+    icon: "👿", floorRange: [50, 50],
+    choices: [
+      {
+        text: "「세계 지식 100%」 '...당신의 슬픔이 느껴져요. 여신을 만나야 하지 않으신가요?'",
+        requirements: { worldKnowledge: 100 },
+        outcomes: {
+          description: "마왕이 멈췄다.\n\n긴 침묵. 그의 눈 속에서 무언가가 흔들렸다.\n\n'...어떻게 그것을. 아무도 그 이야기를 할 줄은 몰랐는데.'\n\n마왕은 천천히 손에 쥐고 있던 흉갑을 내밀었다.\n'이것을 가져가라. 그리고... 그녀에게 전해다오. 아직 기억한다고.'",
+          setFlag: "met-demonking",
+          outfitReward: "demonking-armor",
+          endDungeon: true,
+        }
+      },
+      {
+        text: "「여신을 만나고 왔음」 '여신이 당신을 기다리고 있어요.'",
+        requirements: { flag: "met-goddess" },
+        outcomes: {
+          description: "'...그녀를 만났단 말인가.'\n\n마왕의 손이 잠시 떨렸다.\n\n'그녀는... 잘 있던가?'\n\n그는 조용히 흉갑을 건네주었다. '받아라. 아마 필요할 것이다.'",
+          setFlag: "met-demonking",
+          outfitReward: "demonking-armor",
+          endDungeon: true,
+        }
+      },
+      {
+        text: "'당신과 싸우겠습니다.'",
+        outcomes: {
+          description: "'...좋다. 오너라. 이 심연에서 살아남은 자라면, 나와 싸울 자격이 있다.'\n\n마왕이 천천히 검을 들었다.",
+          setFlag: "met-demonking",
+          startCombat: "demon-king",
+        }
+      },
+      {
+        text: "'...일단 물러나겠습니다.'",
+        outcomes: {
+          description: "'현명하군. 준비가 되었을 때 다시 오너라.'\n\n마왕이 어둠 속으로 물러났다.",
+          setFlag: "met-demonking",
+          endDungeon: true,
+        }
+      },
+    ]
+  },
 ]
 
 // 30 Endings with difficulty stars
 export const ENDINGS: Ending[] = [
   // Secret/Legendary (5 stars)
-  { id: "world-guardian", title: "세계의 수호자", description: "빛과 어둠의 균형을 이해하고, 세계의 진정한 수호자가 되었습니다. 여신과 마왕 모두가 당신을 인정합니다. 이 세계는 당신이 지키겠지요.", requirements: { worldKnowledge: 90, stats: { magic: 80, faith: 80 }, dungeonFloor: 50 }, priority: 1, image: "\u{1F31F}", difficulty: 5, category: "legend" },
-  { id: "true-goddess", title: "새로운 여신", description: "세계의 핵심에 닿아 빛 그 자체가 되었습니다. 인간을 넘어선 존재로서 영원히 세계를 비추게 됩니다.", requirements: { worldKnowledge: 95, stats: { faith: 90, magic: 85, morality: 90 }, dungeonFloor: 50 }, priority: 0, image: "\u{1F4AB}", difficulty: 5, category: "secret" },
-  { id: "demon-queen", title: "마왕의 후계자", description: "어둠의 힘을 받아들여 새로운 마왕이 되었습니다. 두려움의 대상이지만, 세계의 균형을 위해 필요한 존재입니다.", requirements: { worldKnowledge: 80, stats: { combat: 85, magic: 80 }, dungeonFloor: 40 }, priority: 2, image: "\u{1F608}", difficulty: 5, category: "dark" },
+  { id: "world-guardian", title: "세계의 수호자", description: "빛과 어둠의 균형을 이해하고, 세계의 진정한 수호자가 되었습니다. 여신과 마왕 모두가 당신을 인정합니다. 이 세계는 당신이 지키겠지요.", requirements: { worldKnowledge: 90, stats: {magic: 200, faith: 200}, dungeonFloor: 50 }, priority: 1, image: "\u{1F31F}", difficulty: 5, category: "legend" },
+  { id: "true-goddess", title: "새로운 여신", description: "세계의 핵심에 닿아 빛 그 자체가 되었습니다. 인간을 넘어선 존재로서 영원히 세계를 비추게 됩니다.", requirements: { worldKnowledge: 95, stats: {faith: 225, magic: 210, morality: 225}, dungeonFloor: 50 }, priority: 0, image: "\u{1F4AB}", difficulty: 5, category: "secret" },
+  { id: "demon-queen", title: "마왕의 후계자", description: "어둠의 힘을 받아들여 새로운 마왕이 되었습니다. 두려움의 대상이지만, 세계의 균형을 위해 필요한 존재입니다.", requirements: { worldKnowledge: 80, stats: {combat: 210, magic: 200}, dungeonFloor: 40 }, priority: 2, image: "\u{1F608}", difficulty: 5, category: "dark" },
 
   // Noble (4 stars)
-  { id: "queen", title: "여왕", description: "뛰어난 지성과 매력으로 왕국의 여왕이 되었습니다. 현명하고 자비로운 통치로 백성들에게 사랑받습니다.", requirements: { stats: { intelligence: 80, charm: 80, morality: 60 }, minGold: 1000 }, priority: 3, image: "\u{1F451}", difficulty: 4, category: "noble" },
-  { id: "archmage", title: "대마법사", description: "마법의 극의에 도달하여 대마법사가 되었습니다. 마법 학원의 수장으로서 후학을 양성합니다.", requirements: { stats: { magic: 90, intelligence: 70 } }, priority: 4, image: "\u{1F52E}", difficulty: 4, category: "magic" },
-  { id: "holy-knight-ending", title: "성기사", description: "신의 뜻을 받들어 성기사가 되었습니다. 빛의 검으로 악을 물리치고 약자를 보호합니다.", requirements: { stats: { combat: 80, faith: 70, morality: 70 } }, priority: 5, image: "\u2694\uFE0F", difficulty: 4, category: "combat" },
-  { id: "saint", title: "성녀", description: "깊은 신앙심과 세계에 대한 이해로 성녀가 되었습니다. 기적을 행하며 사람들을 구원합니다.", requirements: { stats: { faith: 85, morality: 80 }, worldKnowledge: 60 }, priority: 6, image: "\u271D\uFE0F", difficulty: 4, category: "faith" },
+  { id: "queen", title: "여왕", description: "뛰어난 지성과 매력으로 왕국의 여왕이 되었습니다. 현명하고 자비로운 통치로 백성들에게 사랑받습니다.", requirements: { stats: {intelligence: 200, charm: 200, morality: 150}, minGold: 1000 }, priority: 3, image: "\u{1F451}", difficulty: 4, category: "noble" },
+  { id: "archmage", title: "대마법사", description: "마법의 극의에 도달하여 대마법사가 되었습니다. 마법 학원의 수장으로서 후학을 양성합니다.", requirements: { stats: {magic: 225, intelligence: 175} }, priority: 4, image: "\u{1F52E}", difficulty: 4, category: "magic" },
+  { id: "holy-knight-ending", title: "성기사", description: "신의 뜻을 받들어 성기사가 되었습니다. 빛의 검으로 악을 물리치고 약자를 보호합니다.", requirements: { stats: {combat: 200, faith: 175, morality: 175} }, priority: 5, image: "\u2694\uFE0F", difficulty: 4, category: "combat" },
+  { id: "saint", title: "성녀", description: "깊은 신앙심과 세계에 대한 이해로 성녀가 되었습니다. 기적을 행하며 사람들을 구원합니다.", requirements: { stats: {faith: 210, morality: 200}, worldKnowledge: 60 }, priority: 6, image: "\u271D\uFE0F", difficulty: 4, category: "faith" },
 
   // Advanced (3 stars)
-  { id: "sage", title: "세계의 현자", description: "세계의 비밀을 탐구하여 현자가 되었습니다. 진실을 추구하는 자들의 등불이 됩니다.", requirements: { stats: { intelligence: 80 }, worldKnowledge: 70 }, priority: 7, image: "\u{1F4DA}", difficulty: 3, category: "magic" },
-  { id: "dark-knight-ending", title: "암흑 기사", description: "마왕의 힘을 받아 암흑 기사가 되었습니다. 어둠의 힘으로 세상의 질서에 도전합니다.", requirements: { stats: { combat: 75, magic: 60 }, dungeonFloor: 30 }, priority: 8, image: "\u{1F5A4}", difficulty: 3, category: "dark" },
-  { id: "court-mage", title: "궁정 마법사", description: "왕실에서 인정받는 궁정 마법사가 되었습니다. 왕국의 수호를 위해 마법을 사용합니다.", requirements: { stats: { magic: 70, intelligence: 60, charm: 50 } }, priority: 9, image: "\u{1F9D9}\u200D\u2640\uFE0F", difficulty: 3, category: "magic" },
-  { id: "dragon-slayer", title: "용사", description: "전설의 드래곤을 쓰러뜨리고 용사로 칭송받게 되었습니다. 영웅으로서의 길을 걸어갑니다.", requirements: { stats: { combat: 80, strength: 70 }, dungeonFloor: 40 }, priority: 10, image: "\u{1F409}", difficulty: 3, category: "combat" },
-  { id: "famous-artist", title: "전설의 예술가", description: "탁월한 예술적 재능으로 대륙에서 가장 유명한 예술가가 되었습니다.", requirements: { stats: { creativity: 85, charm: 60 } }, priority: 11, image: "\u{1F3A8}", difficulty: 3, category: "art" },
-  { id: "merchant-prince", title: "대상인", description: "뛰어난 상업 수완으로 대륙 최고의 상인이 되었습니다.", requirements: { stats: { charm: 60, intelligence: 50 }, minGold: 2000 }, priority: 12, image: "\u{1F4B0}", difficulty: 3, category: "noble" },
-  { id: "sword-saint", title: "검성", description: "검의 도를 깨우친 검성이 되었습니다. 한 번의 검기로 산을 가릅니다.", requirements: { stats: { combat: 90, strength: 75 } }, priority: 13, image: "\u{1FA78}", difficulty: 3, category: "combat" },
+  { id: "sage", title: "세계의 현자", description: "세계의 비밀을 탐구하여 현자가 되었습니다. 진실을 추구하는 자들의 등불이 됩니다.", requirements: { stats: {intelligence: 200}, worldKnowledge: 70 }, priority: 7, image: "\u{1F4DA}", difficulty: 3, category: "magic" },
+  { id: "dark-knight-ending", title: "암흑 기사", description: "마왕의 힘을 받아 암흑 기사가 되었습니다. 어둠의 힘으로 세상의 질서에 도전합니다.", requirements: { stats: {combat: 190, magic: 150}, dungeonFloor: 30 }, priority: 8, image: "\u{1F5A4}", difficulty: 3, category: "dark" },
+  { id: "court-mage", title: "궁정 마법사", description: "왕실에서 인정받는 궁정 마법사가 되었습니다. 왕국의 수호를 위해 마법을 사용합니다.", requirements: { stats: {magic: 175, intelligence: 150, charm: 125} }, priority: 9, image: "\u{1F9D9}\u200D\u2640\uFE0F", difficulty: 3, category: "magic" },
+  { id: "dragon-slayer", title: "용사", description: "전설의 드래곤을 쓰러뜨리고 용사로 칭송받게 되었습니다. 영웅으로서의 길을 걸어갑니다.", requirements: { stats: {combat: 200, strength: 175}, dungeonFloor: 40 }, priority: 10, image: "\u{1F409}", difficulty: 3, category: "combat" },
+  { id: "famous-artist", title: "전설의 예술가", description: "탁월한 예술적 재능으로 대륙에서 가장 유명한 예술가가 되었습니다.", requirements: { stats: {creativity: 210, charm: 150} }, priority: 11, image: "\u{1F3A8}", difficulty: 3, category: "art" },
+  { id: "merchant-prince", title: "대상인", description: "뛰어난 상업 수완으로 대륙 최고의 상인이 되었습니다.", requirements: { stats: {charm: 150, intelligence: 125}, minGold: 2000 }, priority: 12, image: "\u{1F4B0}", difficulty: 3, category: "noble" },
+  { id: "sword-saint", title: "검성", description: "검의 도를 깨우친 검성이 되었습니다. 한 번의 검기로 산을 가릅니다.", requirements: { stats: {combat: 225, strength: 190} }, priority: 13, image: "\u{1FA78}", difficulty: 3, category: "combat" },
 
   // Moderate (2 stars)
-  { id: "royal-chef", title: "왕실 요리장", description: "최고의 요리 실력으로 왕실 요리장이 되었습니다.", requirements: { stats: { cooking: 85, creativity: 50 } }, priority: 14, image: "\u{1F468}\u200D\u{1F373}", difficulty: 2, category: "art" },
-  { id: "high-priest", title: "대신관", description: "깊은 신앙심으로 대신관이 되었습니다.", requirements: { stats: { faith: 80, morality: 70 } }, priority: 15, image: "\u26EA", difficulty: 2, category: "faith" },
-  { id: "adventurer", title: "전설의 모험가", description: "수많은 모험을 통해 전설적인 모험가가 되었습니다.", requirements: { stats: { combat: 65, strength: 60 }, dungeonFloor: 20 }, priority: 16, image: "\u{1F5FA}\uFE0F", difficulty: 2, category: "combat" },
-  { id: "scholar-ending", title: "대학자", description: "학문에 매진하여 대학의 교수가 되었습니다. 많은 제자들이 당신을 따릅니다.", requirements: { stats: { intelligence: 75, creativity: 40 } }, priority: 17, image: "\u{1F393}", difficulty: 2, category: "art" },
-  { id: "dancer", title: "왕실 무희", description: "아름다운 춤으로 왕실의 무희가 되었습니다. 모든 이를 매료시킵니다.", requirements: { stats: { charm: 75, creativity: 60 } }, priority: 18, image: "\u{1F483}", difficulty: 2, category: "art" },
-  { id: "witch-ending", title: "숲의 마녀", description: "깊은 숲에서 마법을 연구하는 마녀가 되었습니다. 마을 사람들이 비밀리에 도움을 구해옵니다.", requirements: { stats: { magic: 70, cooking: 40 } }, priority: 19, image: "\u{1F9D9}\u200D\u2640\uFE0F", difficulty: 2, category: "magic" },
-  { id: "knight-captain", title: "기사단장", description: "뛰어난 무예와 리더십으로 기사단을 이끌게 되었습니다.", requirements: { stats: { combat: 70, charm: 50, morality: 50 } }, priority: 20, image: "\u{1F6E1}\uFE0F", difficulty: 2, category: "combat" },
+  { id: "royal-chef", title: "왕실 요리장", description: "최고의 요리 실력으로 왕실 요리장이 되었습니다.", requirements: { stats: {cooking: 210, creativity: 125} }, priority: 14, image: "\u{1F468}\u200D\u{1F373}", difficulty: 2, category: "art" },
+  { id: "high-priest", title: "대신관", description: "깊은 신앙심으로 대신관이 되었습니다.", requirements: { stats: {faith: 200, morality: 175} }, priority: 15, image: "\u26EA", difficulty: 2, category: "faith" },
+  { id: "adventurer", title: "전설의 모험가", description: "수많은 모험을 통해 전설적인 모험가가 되었습니다.", requirements: { stats: {combat: 160, strength: 150}, dungeonFloor: 20 }, priority: 16, image: "\u{1F5FA}\uFE0F", difficulty: 2, category: "combat" },
+  { id: "scholar-ending", title: "대학자", description: "학문에 매진하여 대학의 교수가 되었습니다. 많은 제자들이 당신을 따릅니다.", requirements: { stats: {intelligence: 190, creativity: 100} }, priority: 17, image: "\u{1F393}", difficulty: 2, category: "art" },
+  { id: "dancer", title: "왕실 무희", description: "아름다운 춤으로 왕실의 무희가 되었습니다. 모든 이를 매료시킵니다.", requirements: { stats: {charm: 190, creativity: 150} }, priority: 18, image: "\u{1F483}", difficulty: 2, category: "art" },
+  { id: "witch-ending", title: "숲의 마녀", description: "깊은 숲에서 마법을 연구하는 마녀가 되었습니다. 마을 사람들이 비밀리에 도움을 구해옵니다.", requirements: { stats: {magic: 175, cooking: 100} }, priority: 19, image: "\u{1F9D9}\u200D\u2640\uFE0F", difficulty: 2, category: "magic" },
+  { id: "knight-captain", title: "기사단장", description: "뛰어난 무예와 리더십으로 기사단을 이끌게 되었습니다.", requirements: { stats: {combat: 175, charm: 125, morality: 125} }, priority: 20, image: "\u{1F6E1}\uFE0F", difficulty: 2, category: "combat" },
 
   // Easy (1 star)
-  { id: "good-wife", title: "현모양처", description: "따뜻한 가정을 이루고 행복하게 살았습니다.", requirements: { stats: { housework: 70, cooking: 60, charm: 50 } }, priority: 21, image: "\u{1F3E0}", difficulty: 1, category: "life" },
-  { id: "baker", title: "마을 빵집 주인", description: "맛있는 빵으로 유명한 빵집을 열었습니다. 소박하지만 행복한 삶입니다.", requirements: { stats: { cooking: 60, charm: 40 } }, priority: 22, image: "\u{1F35E}", difficulty: 1, category: "life" },
-  { id: "farmer", title: "농부", description: "드넓은 농장을 일구며 자연과 함께 살아갑니다.", requirements: { stats: { strength: 50, housework: 50 } }, priority: 23, image: "\u{1F33E}", difficulty: 1, category: "life" },
-  { id: "nun", title: "수녀", description: "신앙에 헌신하며 조용한 수도원에서 평화로운 삶을 살아갑니다.", requirements: { stats: { faith: 60, morality: 60 } }, priority: 24, image: "\u{1F64F}", difficulty: 1, category: "faith" },
-  { id: "bard", title: "음유시인", description: "노래와 이야기로 세상을 떠도는 음유시인이 되었습니다.", requirements: { stats: { charm: 50, creativity: 50 } }, priority: 25, image: "\u{1F3B6}", difficulty: 1, category: "art" },
-  { id: "mercenary", title: "용병", description: "검 하나를 들고 전장을 누비는 용병이 되었습니다.", requirements: { stats: { combat: 50, strength: 45 } }, priority: 26, image: "\u2694\uFE0F", difficulty: 1, category: "combat" },
-  { id: "maid", title: "메이드", description: "귀족 가문에서 일하는 메이드가 되었습니다. 성실하고 꼼꼼한 성격으로 인정받습니다.", requirements: { stats: { housework: 55, morality: 40 } }, priority: 27, image: "\u{1F9F9}", difficulty: 1, category: "life" },
+  { id: "good-wife", title: "현모양처", description: "따뜻한 가정을 이루고 행복하게 살았습니다.", requirements: { stats: {housework: 175, cooking: 150, charm: 125} }, priority: 21, image: "\u{1F3E0}", difficulty: 1, category: "life" },
+  { id: "baker", title: "마을 빵집 주인", description: "맛있는 빵으로 유명한 빵집을 열었습니다. 소박하지만 행복한 삶입니다.", requirements: { stats: {cooking: 150, charm: 100} }, priority: 22, image: "\u{1F35E}", difficulty: 1, category: "life" },
+  { id: "farmer", title: "농부", description: "드넓은 농장을 일구며 자연과 함께 살아갑니다.", requirements: { stats: {strength: 125, housework: 125} }, priority: 23, image: "\u{1F33E}", difficulty: 1, category: "life" },
+  { id: "nun", title: "수녀", description: "신앙에 헌신하며 조용한 수도원에서 평화로운 삶을 살아갑니다.", requirements: { stats: {faith: 150, morality: 150} }, priority: 24, image: "\u{1F64F}", difficulty: 1, category: "faith" },
+  { id: "bard", title: "음유시인", description: "노래와 이야기로 세상을 떠도는 음유시인이 되었습니다.", requirements: { stats: {charm: 125, creativity: 125} }, priority: 25, image: "\u{1F3B6}", difficulty: 1, category: "art" },
+  { id: "mercenary", title: "용병", description: "검 하나를 들고 전장을 누비는 용병이 되었습니다.", requirements: { stats: {combat: 125, strength: 110} }, priority: 26, image: "\u2694\uFE0F", difficulty: 1, category: "combat" },
+  { id: "maid", title: "메이드", description: "귀족 가문에서 일하는 메이드가 되었습니다. 성실하고 꼼꼼한 성격으로 인정받습니다.", requirements: { stats: {housework: 140, morality: 100} }, priority: 27, image: "\u{1F9F9}", difficulty: 1, category: "life" },
   { id: "commoner", title: "평범한 시민", description: "평범하지만 행복한 삶을 살았습니다. 소박하지만 충만한 일상입니다.", requirements: {}, priority: 100, image: "\u{1F33B}", difficulty: 1, category: "life" },
+
+  // ── 로맨스 엔딩 ────────────────────────────────────────────────
+  { id: "romance-liana",  title: "왕녀와의 약속",       description: "리아나 왕녀와 깊은 인연을 맺었다. 왕궁의 정원에서 두 사람은 영원을 약속했다. {플레이어}는 왕실의 귀빈으로 초대받아 새로운 삶을 시작한다.",
+    requirements: { romancedNpc: "liana", stats: {charm: 125, morality: 75} }, priority: 0, image: "👑", difficulty: 5, category: "secret" as const },
+  { id: "romance-erika",  title: "교관과 제자, 그 너머",  description: "에리카 교관과의 특별한 관계가 꽃피었다. 두 사람은 함께 왕국 최강의 전사 파트너가 되기로 했다.",
+    requirements: { romancedNpc: "erika", stats: {combat: 150} }, priority: 0, image: "⚔️", difficulty: 4, category: "secret" as const },
+  { id: "romance-sera",   title: "마법사의 봄",           description: "세라와 함께하는 마법 연구는 세계 최고의 성과를 냈다. 두 사람의 마법이 공명할 때, 세계수조차 반응했다.",
+    requirements: { romancedNpc: "sera", stats: {magic: 100} }, priority: 0, image: "✨", difficulty: 3, category: "secret" as const },
+  { id: "romance-mina",   title: "상인과 모험가의 여행",  description: "미나와 함께 왕국 곳곳을 여행하는 대상인이 되었다. 돈도 모험도 가득한, 둘만의 여행이 시작된다.",
+    requirements: { romancedNpc: "mina", stats: {charm: 75} }, priority: 0, image: "💰", difficulty: 2, category: "secret" as const },
+  { id: "romance-kairen", title: "기사의 맹세",            description: "카이렌과 함께 왕국의 수호자가 되었다. 두 사람은 서로의 검이 되어 세계의 평화를 지키겠다고 맹세했다.",
+    requirements: { romancedNpc: "kairen", stats: {combat: 125, morality: 100} }, priority: 0, image: "🛡️", difficulty: 5, category: "secret" as const },
+  { id: "romance-darius", title: "어둠 속의 빛",           description: "다리우스와 함께 어둠의 세계에 발을 들였다. 그러나 두 사람이 함께라면, 그 어둠도 따뜻하다.",
+    requirements: { romancedNpc: "darius", morality: { max: -5 } }, priority: 0, image: "🌑", difficulty: 4, category: "dark" as const },
+  { id: "romance-leon",   title: "귀족의 선율",            description: "레온이 {플레이어}를 위해 작곡한 교향곡이 왕국 전역에 울려 퍼졌다. 두 사람의 이름은 예술의 역사에 함께 새겨졌다.",
+    requirements: { romancedNpc: "leon", stats: {creativity: 100} }, priority: 0, image: "🌹", difficulty: 3, category: "secret" as const },
+  { id: "romance-tom",    title: "평민의 영웅",             description: "톰과 함께, 귀족도 평민도 없는 진짜 실력의 세계를 만들어나가기로 했다. 두 사람의 우정과 사랑은 왕국 전설이 된다.",
+    requirements: { romancedNpc: "tom", stats: {strength: 75, morality: 50} }, priority: 0, image: "💪", difficulty: 2, category: "secret" as const },
+
+  // ── 악향 엔딩 ────────────────────────────────────────────────
+  { id: "dark-lord",      title: "어둠의 지배자",          description: "도덕을 버리고 힘만을 추구한 결과, {플레이어}는 왕국의 그림자 지배자가 되었다. 누구도 거스를 수 없는 절대 권력. 그것이 {플레이어}가 선택한 길이다.",
+    requirements: { morality: { max: -30 }, stats: {combat: 175, magic: 150} }, priority: 1, image: "👿", difficulty: 5, category: "dark" as const },
+  { id: "shadow-broker",  title: "그림자 거래상",           description: "다리우스와 함께 왕국의 뒷세계를 장악했다. 표면 아래에서 모든 것을 움직이는 진짜 권력자.",
+    requirements: { morality: { max: -20 }, stats: {intelligence: 150} }, priority: 1, image: "🌑", difficulty: 4, category: "dark" as const },
+  { id: "dark-witch",     title: "저주받은 마녀",           description: "금지된 마법에 손을 댄 대가로 {플레이어}는 세상으로부터 격리되었다. 그러나 그 힘은 누구도 감히 넘볼 수 없다.",
+    requirements: { morality: { max: -25 }, stats: {magic: 200} }, priority: 1, image: "🔮", difficulty: 4, category: "dark" as const },
+
+  // ── 히든 엔딩 ────────────────────────────────────────────────
+  { id: "world-savior",   title: "세계의 구원자",
+    description: "여신의 눈물을 받아, 빛과 어둠의 균형을 되찾았다. 마왕과 여신, 두 존재를 이어준 {플레이어}의 이름은 세계의 역사에 영원히 새겨졌다. 이것이 진정한 세계의 구원자.",
+    requirements: { storyFlag: "met-goddess-with-armor", hasItem: "goddess-tear-blessed" },
+    priority: 0, image: "🌟", difficulty: 5, category: "secret" as const },
+  { id: "demon-king-victor", title: "마왕을 넘어선 자",
+    description: "마왕을 쓰러뜨렸다. 그러나 마왕은 사라지지 않았다. '마왕은 유지되어야 한다. 균형이니까.' {플레이어}는 그 말의 의미를 이해했다. 새로운 균형의 수호자가 된 {플레이어}는, 빛도 어둠도 아닌 그 경계에 선다.",
+    requirements: { storyFlag: "defeated-demonking", dungeonFloor: 50 },
+    priority: 0, image: "👿", difficulty: 5, category: "secret" as const },
 ]
 
 // Dialogue
@@ -1153,6 +1688,7 @@ function saveUnlockedToStorage(ids: string[]) {
 // Store
 export const useGameStore = create<GameState>((set, get) => ({
   screen: "title",
+  prevScreen: "title" as GameScreen,
   character: { ...initialCharacter, stats: { ...initialStats } },
   gold: 100,
   year: 1,
@@ -1187,7 +1723,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const state = get()
     const newStats = { ...state.character.stats }
     for (const [stat, value] of Object.entries(personality.statBonuses)) {
-      newStats[stat as keyof Stats] = Math.max(0, Math.min(200, (newStats[stat as keyof Stats] || 0) + (value || 0)))
+      newStats[stat as keyof Stats] = Math.max(0, Math.min(500, (newStats[stat as keyof Stats] || 0) + (value || 0)))
     }
     set({ character: { ...state.character, personality, stats: newStats }, gameStarted: true, screen: "game" })
     get()._updateSeasonalShop(get().month, get().year)
@@ -1221,6 +1757,149 @@ export const useGameStore = create<GameState>((set, get) => ({
       seasonalShopOutfits: [], seasonalShopWeapons: [],
       seasonalShopAccessories: ['leather-bracelet','copper-ring','glass-bead','iron-bangle','lucky-charm','scholar-pendant'],
     })
+  },
+
+  // ── NPC 시스템 ─────────────────────────────────────────────────
+  getMetNpcs: () => {
+    const { character, year, month, dungeon } = get()
+    return NPCS.filter(npc => {
+      const c = npc.meetCondition
+      if (c.year && year < c.year) return false
+      if (c.month && year === (c.year ?? 0) && month < c.month) return false
+      if (c.stats) {
+        for (const [stat, val] of Object.entries(c.stats)) {
+          if ((character.stats[stat as keyof Stats] || 0) < (val || 0)) return false
+        }
+      }
+      if (c.morality) {
+        const m = character.stats.morality
+        if (c.morality.max !== undefined && m > c.morality.max) return false
+        if (c.morality.min !== undefined && m < c.morality.min) return false
+      }
+      if (c.dungeonCleared && !dungeon.clearedDungeons?.includes(c.dungeonCleared as any)) return false
+      return true
+    })
+  },
+
+  talkToNpc: (npcId) => {
+    const state = get()
+    const { character } = state
+    const npc = NPCS.find(n => n.id === npcId)
+    if (!npc) return
+    const playerName = character.name || "루체"
+    const fmt = (s: string) => s.replaceAll("{플레이어}", playerName)
+
+    if ((character.npcTalkedToday ?? []).includes(npcId)) {
+      set({ currentEventResult: { title: `${npc.icon} ${npc.name}`, description: fmt(npc.dialogues.daily_limit), icon: npc.icon } })
+      return
+    }
+
+    const affection = (character.npcAffection ?? {})[npcId] || 0
+    const npcMet = character.npcMet ?? []
+    let dialogue = npc.dialogues.low
+
+    if (!npcMet.includes(npcId)) {
+      const newMet = [...npcMet, npcId]
+      set({ character: { ...character, npcMet: newMet, npcTalkedToday: [...(character.npcTalkedToday ?? []), npcId] } })
+      set({ currentEventResult: { title: `✨ 새로운 만남: ${npc.name}`, description: fmt(npc.dialogues.first), icon: npc.icon } })
+      return
+    } else if (affection >= 100) dialogue = npc.dialogues.max
+    else if (affection >= 60)  dialogue = npc.dialogues.high
+    else if (affection >= 30)  dialogue = npc.dialogues.mid
+
+    let bonus = 1
+    if (npc.preferStats) {
+      for (const stat of Object.keys(npc.preferStats)) {
+        if ((character.stats[stat as keyof Stats] || 0) >= 50) bonus += 0.5
+      }
+    }
+    const affGain = Math.floor(3 * bonus)
+    const newAff = Math.min(100, affection + affGain)
+    const newAffMap = { ...(character.npcAffection ?? {}), [npcId]: newAff }
+    const newTalked = [...(character.npcTalkedToday ?? []), npcId]
+
+    set({ character: { ...character, npcAffection: newAffMap, npcTalkedToday: newTalked } })
+    set({ currentEventResult: {
+      title: `${npc.icon} ${npc.name} (호감 ${newAff}/100)`,
+      description: fmt(dialogue) + (affGain > 0 ? `\n\n💕 호감도 +${affGain}` : ''),
+      icon: npc.icon,
+    }})
+  },
+
+  giftToNpc: (npcId, itemId) => {
+    const state = get()
+    const { character, inventory } = state
+    const npc = NPCS.find(n => n.id === npcId)
+    if (!npc || !(character.npcMet ?? []).includes(npcId)) return
+    const fmt = (s: string) => s.replaceAll("{플레이어}", character.name || "루체")
+
+    const invItem = inventory.find(i => i.id === itemId)
+    if (!invItem || invItem.quantity < 1) return
+
+    let gain = GIFT_GRADES.low.affectionGain
+    let dialogue = fmt(npc.dialogues.gift_low)
+    if (GIFT_GRADES.high.items.includes(itemId))      { gain = GIFT_GRADES.high.affectionGain; dialogue = fmt(npc.dialogues.gift_high) }
+    else if (GIFT_GRADES.mid.items.includes(itemId))  { gain = GIFT_GRADES.mid.affectionGain;  dialogue = fmt(npc.dialogues.gift_high) }
+
+    const affection = (character.npcAffection ?? {})[npcId] || 0
+    const newAff = Math.min(100, affection + gain)
+    const newAffMap = { ...(character.npcAffection ?? {}), [npcId]: newAff }
+    const newInv = inventory.map(i => i.id === itemId ? { ...i, quantity: i.quantity - 1 } : i).filter(i => i.quantity > 0)
+
+    let newOwnedAcc = [...(character.ownedAccessories ?? [])]
+    let bonusDesc = ''
+    if (newAff >= 100 && !newOwnedAcc.includes(npc.giftAccessoryId)) {
+      newOwnedAcc.push(npc.giftAccessoryId)
+      const giftAcc = NPC_ACCESSORIES.find(a => a.id === npc.giftAccessoryId)
+      bonusDesc = `\n\n🎁 특별 선물: ${giftAcc?.name || '전용 장신구'} 획득!`
+    }
+
+    set({
+      character: { ...character, npcAffection: newAffMap, ownedAccessories: newOwnedAcc },
+      inventory: newInv,
+      currentEventResult: {
+        title: `${npc.icon} ${npc.name} (호감 ${newAff}/100)`,
+        description: dialogue + `\n\n💕 호감도 +${gain}` + bonusDesc,
+        icon: npc.icon,
+      }
+    })
+  },
+
+  dateNpc: (npcId) => {
+    const state = get()
+    const { character } = state
+    const npc = NPCS.find(n => n.id === npcId)
+    if (!npc) return
+    const affection = (character.npcAffection ?? {})[npcId] || 0
+    if (affection < 60) return
+    const playerName = character.name || "루체"
+
+    const gain = 10
+    const newAff = Math.min(100, affection + gain)
+    set({
+      character: { ...character, npcAffection: { ...(character.npcAffection ?? {}), [npcId]: newAff } },
+      currentEventResult: { title: `💕 데이트: ${npc.name}`, description: npc.dateDescription.replaceAll("{플레이어}", playerName) + `\n\n💕 호감도 +${gain}`, icon: npc.icon }
+    })
+  },
+
+  romanceNpc: (npcId) => {
+    const state = get()
+    const { character } = state
+    const npc = NPCS.find(n => n.id === npcId)
+    if (!npc) return
+    const affection = (character.npcAffection ?? {})[npcId] || 0
+    if (affection < 100) return
+    const playerName = character.name || "루체"
+
+    if (npc.romanceCondition?.morality) {
+      const m = character.stats.morality
+      const rc = npc.romanceCondition.morality
+      if (rc.min !== undefined && m < rc.min) return
+      if (rc.max !== undefined && m > rc.max) return
+    }
+
+    set({ character: { ...character, romancedNpc: npcId } })
+    set({ currentEventResult: { title: `💖 로맨스: ${npc.name}`, description: `${npc.dialogues.max.replaceAll("{플레이어}", playerName)}\n\n💖 ${npc.name}와(과)의 로맨스가 시작되었습니다!`, icon: npc.icon } })
   },
 
   addLog: (message) => {
@@ -1269,7 +1948,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (activity.goldChange < 0 && state.gold < Math.abs(activity.goldChange)) { get().addLog("골드가 부족합니다."); return }
 
     for (const [stat, value] of Object.entries(activity.statChanges)) {
-      newStats[stat as keyof Stats] = Math.min(200, Math.max(0, (newStats[stat as keyof Stats] || 0) + (value || 0)))
+      newStats[stat as keyof Stats] = Math.min(500, Math.max(0, (newStats[stat as keyof Stats] || 0) + (value || 0)))
     }
 
     const newStress = Math.min(state.character.maxStress, Math.max(0, state.character.stress + activity.stressChange))
@@ -1316,7 +1995,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const newStats = { ...state.character.stats }
     if (outcome.statChanges) {
       for (const [stat, value] of Object.entries(outcome.statChanges)) {
-        newStats[stat as keyof Stats] = Math.min(200, Math.max(0, (newStats[stat as keyof Stats] || 0) + (value || 0)))
+        newStats[stat as keyof Stats] = Math.min(500, Math.max(0, (newStats[stat as keyof Stats] || 0) + (value || 0)))
       }
     }
     const newHealth = Math.min(state.character.maxHealth, Math.max(0, state.character.health + (outcome.healthChange || 0)))
@@ -1344,7 +2023,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const newStats = { ...state.character.stats }
     if (outcome.statChanges) {
       for (const [stat, value] of Object.entries(outcome.statChanges)) {
-        newStats[stat as keyof Stats] = Math.min(200, Math.max(0, (newStats[stat as keyof Stats] || 0) + (value || 0)))
+        newStats[stat as keyof Stats] = Math.min(500, Math.max(0, (newStats[stat as keyof Stats] || 0) + (value || 0)))
       }
     }
     const newHealth = Math.min(state.character.maxHealth, Math.max(0, state.character.health + (outcome.healthChange || 0)))
@@ -1428,9 +2107,25 @@ export const useGameStore = create<GameState>((set, get) => ({
       // unlockedEndings는 현재 것과 합산 (더 많은 쪽)
       const mergedUnlocked = Array.from(new Set([...get().unlockedEndings, ...(s.unlockedEndings || [])]))
       saveUnlockedToStorage(mergedUnlocked)
+      // 저장 당시 없던 새 필드에 기본값 보장 (마이그레이션)
+      const safeCharacter = {
+        ...s.character,
+        storyFlags:        s.character.storyFlags        ?? [],
+        npcAffection:      s.character.npcAffection       ?? {},
+        npcMet:            s.character.npcMet             ?? [],
+        npcTalkedToday:    s.character.npcTalkedToday     ?? [],
+        romancedNpc:       s.character.romancedNpc        ?? null,
+        equippedAccessories: s.character.equippedAccessories ?? [],
+        ownedOutfits:      s.character.ownedOutfits       ?? ['default'],
+        currentOutfit:     s.character.currentOutfit      ?? 'default',
+        equippedWeapon:    s.character.equippedWeapon     ?? null,
+        worldKnowledge:    s.character.worldKnowledge     ?? 0,
+        perkPoints:        s.character.perkPoints         ?? 0,
+        unlockedPerks:     s.character.unlockedPerks      ?? [],
+      }
       set({
         screen: 'game',
-        character: s.character,
+        character: safeCharacter,
         gold: s.gold,
         year: s.year,
         month: s.month,
@@ -1614,7 +2309,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         for (const [stat, val] of Object.entries(activity.statChanges)) {
           const change = Math.round((val || 0) * multiplier)
           statChanges[stat as keyof Stats] = change
-          currentStats[stat as keyof Stats] = Math.min(200, Math.max(0, (currentStats[stat as keyof Stats] || 0) + change))
+          currentStats[stat as keyof Stats] = Math.min(500, Math.max(0, (currentStats[stat as keyof Stats] || 0) + change))
         }
       }
 
@@ -1734,7 +2429,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const { equippedAccessories } = get().character
     const result = { attackBonus: 0, magicBonus: 0, hpBonus: 0, critChance: 0, defenseBonus: 0, goldMultiplier: 0, stressReduce: 0, xpBonus: 0 }
     for (const id of equippedAccessories) {
-      const acc = ACCESSORIES.find(a => a.id === id)
+      const acc = [...ACCESSORIES, ...NPC_ACCESSORIES].find(a => a.id === id)
       if (!acc) continue
       const e = acc.effect
       if (e.attackBonus)    result.attackBonus    += e.attackBonus
@@ -1775,7 +2470,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     for (const [key, value] of Object.entries(item.effect)) {
       if (key === "health") newHealth = Math.min(state.character.maxHealth, newHealth + (value || 0))
       else if (key === "stress") newStress = Math.max(0, newStress + (value || 0))
-      else newStats[key as keyof Stats] = Math.min(200, Math.max(0, (newStats[key as keyof Stats] || 0) + (value || 0)))
+      else newStats[key as keyof Stats] = Math.min(500, Math.max(0, (newStats[key as keyof Stats] || 0) + (value || 0)))
     }
     set({
       character: { ...state.character, stats: newStats, health: newHealth, stress: newStress },
@@ -1797,7 +2492,12 @@ export const useGameStore = create<GameState>((set, get) => ({
       // Check seasonal event
       if (month === 3 || month === 6 || month === 9 || month === 12) {
         const season = getSeason(month)
-        const availableEvents = SEASONAL_EVENTS.filter(e => e.season === season && !state.seasonalEventsTriggered.includes(`${year}-${e.id}`))
+        const availableEvents = SEASONAL_EVENTS.filter(e =>
+          e.season === season &&
+          !state.seasonalEventsTriggered.includes(`${year}-${e.id}`) &&
+          (e.minYear === undefined || year >= e.minYear) &&
+          (e.maxYear === undefined || year <= e.maxYear)
+        )
         if (availableEvents.length > 0) {
           const event = availableEvents[Math.floor(Math.random() * availableEvents.length)]
           set({ currentSeasonalEvent: event, seasonalEventsTriggered: [...state.seasonalEventsTriggered, `${year}-${event.id}`], screen: "seasonal" })
@@ -1819,7 +2519,9 @@ export const useGameStore = create<GameState>((set, get) => ({
       }
     }
 
-    set({ year, month, week, day: (week - 1) * 7 + 1 })
+    // 매주 NPC 대화 제한 초기화
+    set({ year, month, week, day: (week - 1) * 7 + 1,
+      character: { ...get().character, npcTalkedToday: [] } })
 
     // 월 변경 시 계절 상점 갱신
     if (week === 1) get()._updateSeasonalShop(month, get().year)
@@ -1834,6 +2536,27 @@ export const useGameStore = create<GameState>((set, get) => ({
         set({ ending, unlockedEndings: newUnlocked, screen: "ending" })
       }
     }
+  },
+
+  debugJumpTo: (targetYear, targetMonth, targetWeek) => {
+    const state = get()
+    const clampedMonth = Math.max(1, Math.min(12, targetMonth))
+    const clampedWeek = Math.max(1, Math.min(4, targetWeek))
+    const clampedYear = Math.max(1, Math.min(8, targetYear))
+    const age = 9 + clampedYear  // 1년차=10살
+    set({
+      year: clampedYear,
+      month: clampedMonth,
+      week: clampedWeek,
+      day: (clampedWeek - 1) * 7 + 1,
+      character: {
+        ...state.character,
+        age,
+        npcTalkedToday: [],
+      },
+    })
+    get()._updateSeasonalShop(clampedMonth, clampedYear)
+    get().addLog(`🛠️ [디버그] ${clampedYear}년차 ${clampedMonth}월 ${clampedWeek}주차로 이동했습니다.`)
   },
 
   checkEnding: () => {
@@ -1851,6 +2574,14 @@ export const useGameStore = create<GameState>((set, get) => ({
       if (ending.requirements.minGold && state.gold < ending.requirements.minGold) qualifies = false
       if (ending.requirements.worldKnowledge && worldKnowledge < ending.requirements.worldKnowledge) qualifies = false
       if (ending.requirements.dungeonFloor && state.dungeon.maxFloorReached < ending.requirements.dungeonFloor) qualifies = false
+      if (ending.requirements.romancedNpc && state.character.romancedNpc !== ending.requirements.romancedNpc) qualifies = false
+      if (ending.requirements.morality) {
+        const m = state.character.stats.morality
+        if (ending.requirements.morality.min !== undefined && m < ending.requirements.morality.min) qualifies = false
+        if (ending.requirements.morality.max !== undefined && m > ending.requirements.morality.max) qualifies = false
+      }
+      if (ending.requirements.storyFlag && !state.character.storyFlags.includes(ending.requirements.storyFlag)) qualifies = false
+      if (ending.requirements.hasItem && !state.inventory.find(i => i.id === ending.requirements.hasItem && i.quantity > 0)) qualifies = false
       if (qualifies) return ending
     }
     return ENDINGS[ENDINGS.length - 1]
@@ -1870,6 +2601,14 @@ export const useGameStore = create<GameState>((set, get) => ({
       if (ending.requirements.minGold && state.gold < ending.requirements.minGold) qualifies = false
       if (ending.requirements.worldKnowledge && worldKnowledge < ending.requirements.worldKnowledge) qualifies = false
       if (ending.requirements.dungeonFloor && state.dungeon.maxFloorReached < ending.requirements.dungeonFloor) qualifies = false
+      if (ending.requirements.romancedNpc && state.character.romancedNpc !== ending.requirements.romancedNpc) qualifies = false
+      if (ending.requirements.morality) {
+        const m = state.character.stats.morality
+        if (ending.requirements.morality.min !== undefined && m < ending.requirements.morality.min) qualifies = false
+        if (ending.requirements.morality.max !== undefined && m > ending.requirements.morality.max) qualifies = false
+      }
+      if (ending.requirements.storyFlag && !state.character.storyFlags.includes(ending.requirements.storyFlag)) qualifies = false
+      if (ending.requirements.hasItem && !state.inventory.find(i => i.id === ending.requirements.hasItem && i.quantity > 0)) qualifies = false
       return qualifies
     }).sort((a, b) => a.priority - b.priority)
   },
@@ -1991,6 +2730,19 @@ export const useGameStore = create<GameState>((set, get) => ({
           outfitReward: recipe.resultId,
         }
       })
+    } else if (recipe.resultType === 'accessory') {
+      const newOwned = state.character.ownedAccessories?.includes(recipe.resultId)
+        ? state.character.ownedAccessories
+        : [...(state.character.ownedAccessories || []), recipe.resultId]
+      set({
+        character: { ...state.character, materials: newMaterials, ownedAccessories: newOwned, ownedWeapons: newWeapons },
+        inventory: newInventory,
+        currentEventResult: {
+          title: `💍 제작 완료!`,
+          description: recipe.description,
+          icon: recipe.icon,
+        }
+      })
     } else {
       // item
       const allItems: Item[] = [...ITEMS, ...CRAFTED_ITEMS]
@@ -2029,10 +2781,13 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   usePotionInDungeon: (itemId) => {
     const state = get()
-    const { dungeon, inventory, character } = state
-    const item = inventory.find(i => i.id === itemId)
-    if (!item || item.quantity <= 0) return
-    if (dungeon.usedPotions.filter(p => p === itemId).length >= (dungeon.potionSlots.filter(p => p === itemId).length)) return
+    const { dungeon, character } = state
+    // 슬롯에 등록된 수량 vs 이미 사용한 수량 비교 (인벤토리는 입장 시 이미 차감됨)
+    const slotCount = dungeon.potionSlots.filter(p => p === itemId).length
+    const usedCount = dungeon.usedPotions.filter(p => p === itemId).length
+    if (slotCount === 0 || usedCount >= slotCount) return
+    const item = [...ITEMS, ...CRAFTED_ITEMS].find(i => i.id === itemId)
+    if (!item) return
 
     // 효과 적용
     const newStats = { ...character.stats }
@@ -2041,7 +2796,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     for (const [key, val] of Object.entries(item.effect)) {
       if (key === 'health') hpChange += (val || 0)
       else if (key === 'stress') stressChange += (val || 0)
-      else newStats[key as keyof Stats] = Math.min(200, (newStats[key as keyof Stats] || 0) + (val || 0))
+      else newStats[key as keyof Stats] = Math.min(500, (newStats[key as keyof Stats] || 0) + (val || 0))
     }
     const potionEff = get().getPerksEffect()
     const boostedHP = hpChange > 0 ? Math.floor(hpChange * (1 + potionEff.potionBonus)) : hpChange
@@ -2068,8 +2823,22 @@ export const useGameStore = create<GameState>((set, get) => ({
     const dungeonDef = DUNGEONS.find(d => d.id === dungeonId)
     const perksHP = get().getPerksEffect()
     const accHP = get().getAccessoriesEffect()
-    const maxHP = Math.floor(50 + state.character.stats.strength * 1.5 + state.character.stats.combat + perksHP.hpBonus + accHP.hpBonus)
+    const currentOutfitData = OUTFITS.find(o => o.id === state.character.currentOutfit)
+    const outfitHP = currentOutfitData?.statBonuses?.hpBonus || 0
+    const maxHP = Math.floor(100 + state.character.stats.strength * 0.5 + state.character.stats.combat * 0.3 + perksHP.hpBonus + accHP.hpBonus + outfitHP)
+    // 슬롯에 등록된 포션을 인벤토리에서 차감
+    let newInventory = [...get().inventory]
+    for (const itemId of state.dungeon.potionSlots) {
+      const idx = newInventory.findIndex(i => i.id === itemId && i.quantity > 0)
+      if (idx !== -1) {
+        newInventory = newInventory.map((i, n) =>
+          n === idx ? { ...i, quantity: i.quantity - 1 } : i
+        ).filter(i => i.quantity > 0)
+      }
+    }
+
     set({
+      inventory: newInventory,
       dungeon: {
         ...state.dungeon,
         active: true, floor: 1,
@@ -2096,13 +2865,13 @@ export const useGameStore = create<GameState>((set, get) => ({
 
     // 보스층 체크
     const isBossFloor = isAbyss
-      ? dungeon.floor % 10 === 0
+      ? (dungeon.floor % 10 === 0)   // 10층마다 중간 보스
       : dungeon.floor === maxFloors
 
     if (isBossFloor) {
       const boss = DUNGEON_ENEMIES.find(e => e.isBoss && (
         isAbyss
-          ? (e.dungeonId === 'abyss' && e.id !== 'boss-abyss') || (dungeon.floor === 99 && e.id === 'boss-abyss')
+          ? (e.dungeonId === 'abyss' && e.id !== 'boss-abyss' && e.id !== 'demon-king') || (dungeon.floor === 50 && e.id === 'boss-abyss')
           : e.dungeonId === dungeonId
       ))
       if (boss) {
@@ -2277,6 +3046,21 @@ export const useGameStore = create<GameState>((set, get) => ({
       const dungeonNames: Record<string, string> = { forest:'변방의 숲', valley:'설원 골짜기', fortress:'핏빛 성채', worldtree:'검은 세계수', worldsend:'세계의 끝' }
       const clearLog = [`🏆 ${dungeonNames[dungeonId] || dungeonId} 클리어!`]
       if (isFirstClear) clearLog.push('🎊 최초 클리어! 특성 포인트 +1')
+
+      // 세계의 끝 보스 처치 → 여신 이벤트
+      if (dungeonId === 'worldsend' && enemy.id !== 'goddess-combat') {
+        const goddessEncounter = DUNGEON_ENCOUNTERS.find(e => e.id === 'worldsend-goddess-final')
+        set({
+          character: { ...character, xp: newXP, level: newLevel, perkPoints: newPerkPoints + (isFirstClear ? 1 : 0) },
+          dungeon: {
+            ...dungeon, currentEnemy: null, enemyHP: 0, loot: newLoot, clearedDungeons,
+            currentEncounter: goddessEncounter || null,
+            combatLog: [...killLog, ...clearLog, '✨ 세계의 끝 너머에서 빛이 느껴진다...'],
+          },
+        })
+        return
+      }
+
       set({
         character: { ...character, xp: newXP, level: newLevel, perkPoints: newPerkPoints + (isFirstClear ? 1 : 0) },
         dungeon: {
@@ -2289,10 +3073,36 @@ export const useGameStore = create<GameState>((set, get) => ({
       return
     }
 
-    // 무저갱 보스 (floor 99)
+    // 무저갱 최종 보스 (floor 50) → 마왕 이벤트
     if (enemy.isBoss && isAbyss && enemy.id === 'boss-abyss') {
-      set({ dungeon: { ...dungeon, currentEnemy: null, enemyHP: 0, loot: newLoot, combatLog: [...killLog, '마왕의 현신을 쓰러뜨렸다! 심연이 흔들린다...'] } })
-      setTimeout(() => get().endDungeon(true), 1000)
+      const demonKingEncounter = DUNGEON_ENCOUNTERS.find(e => e.id === 'abyss-demonking-final')
+      set({
+        character: { ...character, xp: newXP, level: newLevel, perkPoints: newPerkPoints },
+        dungeon: {
+          ...dungeon, currentEnemy: null, enemyHP: 0, loot: newLoot,
+          currentEncounter: demonKingEncounter || null,
+          combatLog: [...killLog, '심연의 끝... 어둠 속에서 거대한 기척이 느껴진다.'],
+        },
+      })
+      return
+    }
+
+    // 마왕 직접 처치 시 → 히든 엔딩 트리거
+    if (enemy.id === 'demon-king') {
+      const newFlags = character.storyFlags.includes('defeated-demonking')
+        ? character.storyFlags : [...character.storyFlags, 'defeated-demonking']
+      set({
+        character: { ...character, xp: newXP, level: newLevel, perkPoints: newPerkPoints, storyFlags: newFlags },
+        dungeon: { ...dungeon, currentEnemy: null, enemyHP: 0, loot: newLoot,
+          combatLog: [...killLog,
+            '👿 마왕이 쓰러졌다.',
+            '...침묵. 심연 전체가 숨을 죽였다.',
+            '"...그래. 네가 이겼다. 하지만 기억해라. 마왕은 유지되어야 한다. 균형이니까."',
+            '마왕은 어둠 속으로 사라졌다.',
+          ]
+        },
+      })
+      setTimeout(() => get().endDungeon(true), 2000)
       return
     }
 
@@ -2349,6 +3159,12 @@ export const useGameStore = create<GameState>((set, get) => ({
       for (const [key, value] of Object.entries(choice.requirements)) {
         if (key === 'worldKnowledge') {
           if (character.worldKnowledge < (value || 0)) { set({ dungeon: { ...dungeon, combatLog: [...dungeon.combatLog, '세계에 대한 이해가 부족합니다...'] } }); return }
+        } else if (key === 'flag') {
+          if (!character.storyFlags.includes(value as string)) { set({ dungeon: { ...dungeon, combatLog: [...dungeon.combatLog, '조건이 충족되지 않았습니다...'] } }); return }
+        } else if (key === 'notFlag') {
+          if (character.storyFlags.includes(value as string)) { set({ dungeon: { ...dungeon, combatLog: [...dungeon.combatLog, '이미 다른 선택을 했습니다...'] } }); return }
+        } else if (key === 'equippedOutfit') {
+          if (character.currentOutfit !== (value as string)) { set({ dungeon: { ...dungeon, combatLog: [...dungeon.combatLog, '특정 복장을 착용해야 합니다...'] } }); return }
         } else if ((character.stats[key as keyof Stats] || 0) < (value || 0)) {
           set({ dungeon: { ...dungeon, combatLog: [...dungeon.combatLog, '능력치가 부족합니다...'] } }); return
         }
@@ -2359,7 +3175,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const newStats = { ...character.stats }
     if (outcome.statChanges) {
       for (const [stat, value] of Object.entries(outcome.statChanges)) {
-        newStats[stat as keyof Stats] = Math.min(200, Math.max(0, (newStats[stat as keyof Stats] || 0) + (value || 0)))
+        newStats[stat as keyof Stats] = Math.min(500, Math.max(0, (newStats[stat as keyof Stats] || 0) + (value || 0)))
       }
     }
     const newHP = Math.min(dungeon.maxHP, Math.max(0, dungeon.currentHP + (outcome.healthChange || 0)))
@@ -2386,6 +3202,38 @@ export const useGameStore = create<GameState>((set, get) => ({
       } : {}),
     })
 
+    // 스토리 플래그 설정
+    if (outcome.setFlag) {
+      const flags = get().character.storyFlags
+      if (!flags.includes(outcome.setFlag)) {
+        set({ character: { ...get().character, storyFlags: [...flags, outcome.setFlag] } })
+      }
+    }
+
+    // 특수 아이템 지급
+    if (outcome.specialItem) {
+      const allItems = [...ITEMS, ...CRAFTED_ITEMS]
+      const item = allItems.find(i => i.id === outcome.specialItem)
+      if (item) {
+        const inv = get().inventory
+        const existing = inv.find(i => i.id === item.id)
+        const newInv = existing
+          ? inv.map(i => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i)
+          : [...inv, { ...item, quantity: 1 }]
+        set({ inventory: newInv })
+      }
+    }
+
+    // 전투 시작
+    if (outcome.startCombat) {
+      const enemy = DUNGEON_ENEMIES.find(e => e.id === outcome.startCombat)
+      if (enemy) {
+        set({ dungeon: { ...get().dungeon, currentEncounter: null, currentEnemy: enemy, enemyHP: enemy.hp,
+          combatLog: [...get().dungeon.combatLog, `⚠️ ${enemy.name}이(가) 나타났다!`] } })
+        return
+      }
+    }
+
     if (outcome.endDungeon) {
       setTimeout(() => get().endDungeon(true), 500)
     } else if (outcome.nextFloor) {
@@ -2405,7 +3253,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     // 스탯 보상 적용
     const newStats = { ...character.stats }
     for (const [stat, value] of Object.entries(dungeon.loot.statGains)) {
-      newStats[stat as keyof Stats] = Math.min(200, (newStats[stat as keyof Stats] || 0) + (value || 0))
+      newStats[stat as keyof Stats] = Math.min(500, (newStats[stat as keyof Stats] || 0) + (value || 0))
     }
 
     // 재료 지급
@@ -2438,7 +3286,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         clearedDungeons: dungeon.clearedDungeons,
         maxFloorReached: dungeon.maxFloorReached,
         currentDungeonId: null,
-        potionSlots: dungeon.potionSlots,
+        potionSlots: [],  // 다음 던전 전에 새로 설정
       },
       screen: 'game',
     })
