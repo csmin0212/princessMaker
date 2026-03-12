@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 
 const rarityColor: Record<string, string> = {
@@ -36,6 +37,78 @@ function getSeason(month: number) {
   return "winter"
 }
 
+// ── 구매 수량 팝업 ─────────────────────────────────────────────────────────────
+interface PurchaseTarget {
+  icon: string
+  name: string
+  description?: string
+  unitPrice: number   // 할인 적용 후 단가
+  onConfirm: (qty: number) => void
+}
+
+function PurchaseDialog({
+  target, gold, open, onClose,
+}: {
+  target: PurchaseTarget | null
+  gold: number
+  open: boolean
+  onClose: () => void
+}) {
+  const [qty, setQty] = useState(1)
+
+  // 팝업이 열릴 때마다 수량 초기화
+  useEffect(() => { if (open) setQty(1) }, [open])
+
+  if (!target) return null
+
+  const maxAffordable = Math.max(1, Math.floor(gold / target.unitPrice))
+  const totalCost = target.unitPrice * qty
+  const canAfford = gold >= totalCost
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v) onClose() }}>
+      <DialogContent className="max-w-xs">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <span className="text-2xl">{target.icon}</span>
+            {target.name} 구매
+          </DialogTitle>
+        </DialogHeader>
+        {target.description && (
+          <p className="text-xs text-muted-foreground -mt-2">{target.description}</p>
+        )}
+        {/* 수량 선택 */}
+        <div className="flex items-center justify-center gap-3 py-2">
+          <Button variant="outline" size="sm" className="w-8 h-8 p-0 text-lg"
+            onClick={() => setQty(q => Math.max(1, q - 1))} disabled={qty <= 1}>−</Button>
+          <span className="w-10 text-center text-xl font-bold">{qty}</span>
+          <Button variant="outline" size="sm" className="w-8 h-8 p-0 text-lg"
+            onClick={() => setQty(q => Math.min(maxAffordable, q + 1))} disabled={qty >= maxAffordable}>＋</Button>
+        </div>
+        {/* 가격 */}
+        <div className="text-center text-sm">
+          <span className="text-muted-foreground">단가 </span>
+          <span className="font-semibold text-amber-600">🪙 {target.unitPrice}G</span>
+          <span className="mx-2 text-muted-foreground">×{qty} =</span>
+          <span className={cn("font-bold text-base", canAfford ? "text-amber-600" : "text-red-500")}>
+            🪙 {totalCost}G
+          </span>
+        </div>
+        {!canAfford && (
+          <p className="text-xs text-center text-red-500">골드가 부족합니다</p>
+        )}
+        <div className="flex gap-2 pt-1">
+          <Button variant="outline" className="flex-1" onClick={onClose}>취소</Button>
+          <Button className="flex-1" disabled={!canAfford}
+            onClick={() => { target.onConfirm(qty); onClose() }}>
+            확인
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function ShopScreen() {
   const {
     gold, buyItem, buyWeapon, buyOutfit, buyAccessory,
@@ -44,6 +117,8 @@ export function ShopScreen() {
     _updateSeasonalShop,
   } = useGameStore()
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
+  const [purchaseTarget, setPurchaseTarget] = useState<PurchaseTarget | null>(null)
+  const [purchaseOpen, setPurchaseOpen] = useState(false)
 
   useEffect(() => {
     _updateSeasonalShop(month, year)
@@ -52,6 +127,12 @@ export function ShopScreen() {
   const flash = (text: string, ok = true) => {
     setMsg({ text, ok })
     setTimeout(() => setMsg(null), 1800)
+  }
+
+  // 구매 팝업 열기 헬퍼
+  const openPurchase = (target: PurchaseTarget) => {
+    setPurchaseTarget(target)
+    setPurchaseOpen(true)
   }
 
   // ── 아이템 카드 컴포넌트 ──────────────────────────────────────
@@ -106,8 +187,7 @@ export function ShopScreen() {
   const seasonName = seasonLabel[season]
   const seasonIco  = seasonIcon[season]
 
-  // 포션/소모품
-  const potions   = ITEMS.filter(i => i.effect.health !== undefined || i.effect.stress !== undefined)
+  // 능력치 아이템 (포션 제외 — 포션은 방랑상인 전용)
   const statItems = ITEMS.filter(i => i.effect.health === undefined && i.effect.stress === undefined)
   // 상시 무기
   const baseWeapons   = WEAPONS.filter(w => w.price && w.obtainMethod === "상점")
@@ -152,6 +232,12 @@ export function ShopScreen() {
           </div>
         )}
 
+        {/* 포션 안내 배너 */}
+        <div className="mb-4 p-3 rounded-xl bg-violet-50 border border-violet-200 flex items-center gap-2 text-sm text-violet-700">
+          <span className="text-xl">🧙</span>
+          <span>포션·소모품은 <strong>방랑상인</strong>에게서 구매할 수 있습니다. (매 시즌 2번째 달 2주차 방문)</span>
+        </div>
+
         {/* 계절 한정 배너 */}
         {(seaOutfits.length > 0 || seaWeapons.length > 0 || seaAcc.length > 0) && (
           <div className="mb-5 p-3 rounded-xl bg-amber-50 border-2 border-amber-300">
@@ -164,40 +250,31 @@ export function ShopScreen() {
           </div>
         )}
 
-        <Tabs defaultValue="potion">
-          <TabsList className="grid grid-cols-5 mb-5 w-full">
-            <TabsTrigger value="potion">🧪 포션</TabsTrigger>
+        <Tabs defaultValue="stat">
+          <TabsList className="grid grid-cols-4 mb-5 w-full">
             <TabsTrigger value="stat">⭐ 능력치</TabsTrigger>
             <TabsTrigger value="weapon">⚔️ 무기</TabsTrigger>
             <TabsTrigger value="outfit">👗 의상</TabsTrigger>
             <TabsTrigger value="accessory">💍 장신구</TabsTrigger>
           </TabsList>
 
-          {/* 포션 */}
-          <TabsContent value="potion">
-            <p className="text-xs text-muted-foreground mb-3">HP 회복 및 스트레스 감소 소모품</p>
-            <ScrollArea className="h-[calc(100vh-340px)]">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pr-2">
-                {potions.map(item => {
-                  const desc = Object.entries(item.effect).map(([k,v]) => `${statLabel[k]||k} ${(v??0)>0?"+":""}${v}`).join(", ")
-                  return <ItemCard key={item.id} id={item.id} name={item.name} icon={item.icon}
-                    description={desc} price={item.price}
-                    onBuy={() => { const ok = buyItem(item); flash(ok ? `${item.name} 구매!` : "골드 부족", ok) }} />
-                })}
-              </div>
-            </ScrollArea>
-          </TabsContent>
-
           {/* 능력치 */}
           <TabsContent value="stat">
             <p className="text-xs text-muted-foreground mb-3">사용 시 능력치 영구 증가</p>
-            <ScrollArea className="h-[calc(100vh-340px)]">
+            <ScrollArea className="h-[calc(100vh-380px)]">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pr-2">
                 {statItems.map(item => {
                   const desc = Object.entries(item.effect).map(([k,v]) => `${statLabel[k]||k} +${v}`).join(", ")
                   return <ItemCard key={item.id} id={item.id} name={item.name} icon={item.icon}
                     description={desc} price={item.price}
-                    onBuy={() => { const ok = buyItem(item); flash(ok ? `${item.name} 구매!` : "골드 부족", ok) }} />
+                    onBuy={() => openPurchase({
+                      icon: item.icon, name: item.name, description: desc,
+                      unitPrice: discountedPrice(item.price),
+                      onConfirm: (qty) => {
+                        const ok = buyItem(item, qty)
+                        flash(ok ? `${item.name} ${qty}개 구매!` : "골드 부족", ok)
+                      },
+                    })} />
                 })}
               </div>
             </ScrollArea>
@@ -206,7 +283,7 @@ export function ShopScreen() {
           {/* 무기 */}
           <TabsContent value="weapon">
             <p className="text-xs text-muted-foreground mb-3">던전 전투용 무기. 옷장에서 장착하세요.</p>
-            <ScrollArea className="h-[calc(100vh-340px)]">
+            <ScrollArea className="h-[calc(100vh-380px)]">
               <div className="space-y-4 pr-2">
                 {/* 계절/연도 한정 */}
                 {seaWeapons.length > 0 && (
@@ -218,7 +295,17 @@ export function ShopScreen() {
                         const desc = [w.attackBonus > 0 && `공격 +${w.attackBonus}`, w.magicAttackBonus > 0 && `마법 +${w.magicAttackBonus}`, w.critChance && `치명타 +${Math.round(w.critChance*100)}%`].filter(Boolean).join(" · ")
                         return <ItemCard key={w.id} id={w.id} name={w.name} icon={w.icon} description={desc}
                           price={w.price} rarity={w.rarity} owned={owned} seasonal
-                          onBuy={() => { if (!w.price) return; const ok = buyWeapon(w.id, w.price); flash(ok ? `${w.name} 구매!` : owned ? "이미 보유" : "골드 부족", ok) }} />
+                          onBuy={() => {
+                            if (!w.price) return
+                            openPurchase({
+                              icon: w.icon, name: w.name, description: desc,
+                              unitPrice: discountedPrice(w.price),
+                              onConfirm: () => {
+                                const ok = buyWeapon(w.id, discountedPrice(w.price!))
+                                flash(ok ? `${w.name} 구매!` : owned ? "이미 보유" : "골드 부족", ok)
+                              },
+                            })
+                          }} />
                       })}
                     </div>
                   </div>
@@ -232,7 +319,17 @@ export function ShopScreen() {
                       const desc = [w.attackBonus > 0 && `공격 +${w.attackBonus}`, w.magicAttackBonus > 0 && `마법 +${w.magicAttackBonus}`, w.critChance && `치명타 +${Math.round(w.critChance*100)}%`].filter(Boolean).join(" · ")
                       return <ItemCard key={w.id} id={w.id} name={w.name} icon={w.icon} description={desc}
                         price={w.price} rarity={w.rarity} owned={owned}
-                        onBuy={() => { if (!w.price) return; const ok = buyWeapon(w.id, w.price); flash(ok ? `${w.name} 구매!` : owned ? "이미 보유" : "골드 부족", ok) }} />
+                        onBuy={() => {
+                          if (!w.price) return
+                          openPurchase({
+                            icon: w.icon, name: w.name, description: desc,
+                            unitPrice: discountedPrice(w.price),
+                            onConfirm: () => {
+                              const ok = buyWeapon(w.id, discountedPrice(w.price!))
+                              flash(ok ? `${w.name} 구매!` : owned ? "이미 보유" : "골드 부족", ok)
+                            },
+                          })
+                        }} />
                     })}
                   </div>
                 </div>
@@ -243,7 +340,7 @@ export function ShopScreen() {
           {/* 의상 */}
           <TabsContent value="outfit">
             <p className="text-xs text-muted-foreground mb-3">착용 시 능력치 보너스. 옷장에서 변경하세요.</p>
-            <ScrollArea className="h-[calc(100vh-340px)]">
+            <ScrollArea className="h-[calc(100vh-380px)]">
               <div className="space-y-4 pr-2">
                 {seaOutfits.length > 0 && (
                   <div>
@@ -254,7 +351,17 @@ export function ShopScreen() {
                         const desc = o.statBonuses ? Object.entries(o.statBonuses).map(([k,v]) => `${statLabel[k]||k} +${v}`).join(" · ") : "보너스 없음"
                         return <ItemCard key={o.id} id={o.id} name={o.name} icon={o.icon} description={desc}
                           price={o.price} rarity={o.rarity} owned={owned} seasonal
-                          onBuy={() => { if (!o.price) return; const ok = buyOutfit(o.id, o.price); flash(ok ? `${o.name} 구매!` : owned ? "이미 보유" : "골드 부족", ok) }} />
+                          onBuy={() => {
+                            if (!o.price) return
+                            openPurchase({
+                              icon: o.icon, name: o.name, description: desc,
+                              unitPrice: discountedPrice(o.price),
+                              onConfirm: () => {
+                                const ok = buyOutfit(o.id, discountedPrice(o.price!))
+                                flash(ok ? `${o.name} 구매!` : owned ? "이미 보유" : "골드 부족", ok)
+                              },
+                            })
+                          }} />
                       })}
                     </div>
                   </div>
@@ -267,7 +374,17 @@ export function ShopScreen() {
                       const desc = o.statBonuses ? Object.entries(o.statBonuses).map(([k,v]) => `${statLabel[k]||k} +${v}`).join(" · ") : "보너스 없음"
                       return <ItemCard key={o.id} id={o.id} name={o.name} icon={o.icon} description={desc}
                         price={o.price} rarity={o.rarity} owned={owned}
-                        onBuy={() => { if (!o.price) return; const ok = buyOutfit(o.id, o.price); flash(ok ? `${o.name} 구매!` : owned ? "이미 보유" : "골드 부족", ok) }} />
+                        onBuy={() => {
+                          if (!o.price) return
+                          openPurchase({
+                            icon: o.icon, name: o.name, description: desc,
+                            unitPrice: discountedPrice(o.price),
+                            onConfirm: () => {
+                              const ok = buyOutfit(o.id, discountedPrice(o.price!))
+                              flash(ok ? `${o.name} 구매!` : owned ? "이미 보유" : "골드 부족", ok)
+                            },
+                          })
+                        }} />
                     })}
                   </div>
                 </div>
@@ -278,7 +395,7 @@ export function ShopScreen() {
           {/* 장신구 */}
           <TabsContent value="accessory">
             <p className="text-xs text-muted-foreground mb-3">최대 2개 장착. 옷장에서 착용·해제하세요.</p>
-            <ScrollArea className="h-[calc(100vh-340px)]">
+            <ScrollArea className="h-[calc(100vh-380px)]">
               <div className="space-y-4 pr-2">
                 {seaAcc.length > 0 && (
                   <div>
@@ -295,7 +412,17 @@ export function ShopScreen() {
                         }).join(" · ")
                         return <ItemCard key={a.id} id={a.id} name={a.name} icon={a.icon} description={desc}
                           price={a.price} rarity={a.rarity} owned={owned} seasonal
-                          onBuy={() => { if (!a.price) return; const ok = buyAccessory(a.id, a.price); flash(ok ? `${a.name} 구매!` : owned ? "이미 보유" : "골드 부족", ok) }} />
+                          onBuy={() => {
+                            if (!a.price) return
+                            openPurchase({
+                              icon: a.icon, name: a.name, description: desc,
+                              unitPrice: discountedPrice(a.price),
+                              onConfirm: () => {
+                                const ok = buyAccessory(a.id, discountedPrice(a.price!))
+                                flash(ok ? `${a.name} 구매!` : owned ? "이미 보유" : "골드 부족", ok)
+                              },
+                            })
+                          }} />
                       })}
                     </div>
                   </div>
@@ -314,7 +441,17 @@ export function ShopScreen() {
                       }).join(" · ")
                       return <ItemCard key={a.id} id={a.id} name={a.name} icon={a.icon} description={desc}
                         price={a.price} rarity={a.rarity} owned={owned}
-                        onBuy={() => { if (!a.price) return; const ok = buyAccessory(a.id, a.price); flash(ok ? `${a.name} 구매!` : owned ? "이미 보유" : "골드 부족", ok) }} />
+                        onBuy={() => {
+                          if (!a.price) return
+                          openPurchase({
+                            icon: a.icon, name: a.name, description: desc,
+                            unitPrice: discountedPrice(a.price),
+                            onConfirm: () => {
+                              const ok = buyAccessory(a.id, discountedPrice(a.price!))
+                              flash(ok ? `${a.name} 구매!` : owned ? "이미 보유" : "골드 부족", ok)
+                            },
+                          })
+                        }} />
                     })}
                   </div>
                 </div>
@@ -323,6 +460,14 @@ export function ShopScreen() {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* 수량 선택 팝업 */}
+      <PurchaseDialog
+        target={purchaseTarget}
+        gold={gold}
+        open={purchaseOpen}
+        onClose={() => setPurchaseOpen(false)}
+      />
     </div>
   )
 }

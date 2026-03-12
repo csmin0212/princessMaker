@@ -434,7 +434,11 @@ interface GameState {
   resolveEvent: (choiceIndex: number) => void
   resolveSeasonalEvent: (choiceIndex: number) => void
   clearEventResult: () => void
-  buyItem: (item: Item) => boolean
+  wanderingMerchantActive: boolean   // 이번 주 상인 마을 방문 여부
+  wanderingMerchantOpen: boolean     // 팝업 열림 여부
+  dismissWanderingMerchant: () => void  // 팝업 닫기 (상인은 여전히 마을에 있음)
+  openWanderingMerchant: () => void    // 팝업 다시 열기
+  buyItem: (item: Item, quantity?: number) => boolean
   useItem: (itemId: string) => boolean
   advanceTime: () => void
   checkEnding: () => Ending | null
@@ -1710,6 +1714,8 @@ export const useGameStore = create<GameState>((set, get) => ({
   gameStarted: false,
   eventLog: [],
   dungeon: { ...initialDungeon },
+  wanderingMerchantActive: false,
+  wanderingMerchantOpen: false,
   seasonalEventsTriggered: [],
   unlockedEndings: loadUnlockedFromStorage(),
 
@@ -1738,6 +1744,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       inventory: [],
       currentEvent: null, currentSeasonalEvent: null, currentEventResult: null,
       ending: null, gameStarted: true, eventLog: [], dungeon: { ...initialDungeon },
+      wanderingMerchantActive: false,
+      wanderingMerchantOpen: false,
       seasonalEventsTriggered: [], unlockedEndings: [], screen: "game",
     })
     get().addLog(`${name}의 모험이 시작됩니다!`)
@@ -1753,6 +1761,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       inventory: [],
       currentEvent: null, currentSeasonalEvent: null, currentEventResult: null,
       ending: null, gameStarted: false, eventLog: [], dungeon: { ...initialDungeon },
+      wanderingMerchantActive: false,
+      wanderingMerchantOpen: false,
       seasonalEventsTriggered: [], unlockedEndings: prevUnlocked,
       seasonalShopOutfits: [], seasonalShopWeapons: [],
       seasonalShopAccessories: ['leather-bracelet','copper-ring','glass-bead','iron-bangle','lucky-charm','scholar-pendant'],
@@ -2444,20 +2454,29 @@ export const useGameStore = create<GameState>((set, get) => ({
     return result
   },
 
-  buyItem: (item) => {
+  buyItem: (item, quantity = 1) => {
     const state = get()
     // thrifty 특성: 상점 가격 10% 할인
     const hasThrifty = state.character.unlockedPerks.includes('thrifty')
-    const effectivePrice = hasThrifty ? Math.floor(item.price * 0.9) : item.price
-    if (state.gold < effectivePrice) return false
+    const effectiveUnitPrice = hasThrifty ? Math.floor(item.price * 0.9) : item.price
+    const totalCost = effectiveUnitPrice * quantity
+    if (state.gold < totalCost) return false
     const existingItem = state.inventory.find((i) => i.id === item.id)
     if (existingItem) {
-      set({ gold: state.gold - effectivePrice, inventory: state.inventory.map((i) => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i) })
+      set({ gold: state.gold - totalCost, inventory: state.inventory.map((i) => i.id === item.id ? { ...i, quantity: i.quantity + quantity } : i) })
     } else {
-      set({ gold: state.gold - effectivePrice, inventory: [...state.inventory, { ...item, quantity: 1 }] })
+      set({ gold: state.gold - totalCost, inventory: [...state.inventory, { ...item, quantity }] })
     }
-    get().addLog(`${item.name}을(를) 구매했습니다!`)
+    get().addLog(`${item.name}을(를) ${quantity}개 구매했습니다!`)
     return true
+  },
+
+  dismissWanderingMerchant: () => {
+    set({ wanderingMerchantOpen: false })
+  },
+
+  openWanderingMerchant: () => {
+    set({ wanderingMerchantOpen: true })
   },
 
   useItem: (itemId) => {
@@ -2520,8 +2539,13 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
 
     // 매주 NPC 대화 제한 초기화
+    // 방랑상인: 각 시즌 2번째 달, 2주차에 방문 (2, 5, 8, 11월 2주)
+    const merchantActive = week === 2 && [2, 5, 8, 11].includes(month)
     set({ year, month, week, day: (week - 1) * 7 + 1,
-      character: { ...get().character, npcTalkedToday: [] } })
+      character: { ...get().character, npcTalkedToday: [] },
+      wanderingMerchantActive: merchantActive,
+      wanderingMerchantOpen: merchantActive,  // 도착하면 팝업 자동 오픈
+    })
 
     // 월 변경 시 계절 상점 갱신
     if (week === 1) get()._updateSeasonalShop(month, get().year)

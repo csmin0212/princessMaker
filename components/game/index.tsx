@@ -22,6 +22,7 @@ import { CraftScreen } from "./craft-screen"
 import { PerkScreen } from "./perk-screen"
 import { SettingsScreen } from "./settings-screen"
 import { EventResultModal } from "./event-result-modal"
+import { WanderingMerchantPopup } from "./wandering-merchant-popup"
 
 export function Game() {
   const { screen } = useGameStore()
@@ -76,6 +77,7 @@ export function Game() {
         }
       })()}
       <EventResultModal />
+      <WanderingMerchantPopup />
     </>
   )
 }
