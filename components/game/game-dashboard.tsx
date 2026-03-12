@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 
 export function GameDashboard() {
-  const { goAdventure, setScreen, gold, character } = useGameStore()
+  const { goAdventure, setScreen, gold, character, wanderingMerchantActive, openWanderingMerchant } = useGameStore()
 
   const currentOutfit = OUTFITS.find(o => o.id === character.currentOutfit) || OUTFITS[0]
 
@@ -56,6 +56,23 @@ export function GameDashboard() {
           </div>
         </div>
       </header>
+
+      {/* 방랑상인 방문 배너 */}
+      {wanderingMerchantActive && (
+        <div className="border-b border-violet-200 bg-violet-50 dark:bg-violet-950/30">
+          <div className="container mx-auto px-4 py-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm text-violet-700 dark:text-violet-300">
+              <span className="text-xl">🧙</span>
+              <span className="font-semibold">방랑상인이 이번 주 마을을 방문 중입니다!</span>
+              <span className="hidden sm:inline text-xs text-violet-500">포션·소모품 구매 가능</span>
+            </div>
+            <Button size="sm" className="bg-violet-600 hover:bg-violet-700 text-white text-xs px-3 h-7"
+              onClick={openWanderingMerchant}>
+              상인 만나기 →
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-6">
