@@ -190,6 +190,62 @@ export interface EventResult {
   outfitReward?: string
 }
 
+// ─── 축제 이벤트 시스템 ──────────────────────────────────────────────────────
+export interface FestivalOutcome {
+  description: string
+  statChanges?: Partial<Stats>
+  goldChange?: number
+  stressChange?: number
+  healthChange?: number
+  worldKnowledgeChange?: number
+  outfitReward?: string
+  affectionGain?: number     // 동반자 호감도 증가
+}
+
+export interface FestivalActivity {
+  id: string
+  name: string
+  icon: string
+  description: string
+  apCost: number
+  requirements?: Partial<Stats>
+  requiresCompanion?: boolean  // 동반자 필수
+  minYear?: number             // 이 연도부터 표시
+  outcome: FestivalOutcome
+  companionBonus?: {           // 동반자 있을 때 추가 대사
+    description: string        // NPC 이름 앞에 붙임
+  }
+}
+
+export interface FestivalEvent {
+  id: string
+  type: "festival"
+  season: "spring" | "summer" | "fall" | "winter"
+  title: string
+  description: string
+  totalAP: number
+  minYear?: number
+  maxYear?: number
+  companionType: "npc" | "father" | "none"  // npc=NPC선택, father=아버지동반, none=혼자
+  companionMinAffection?: number             // NPC 초대 최소 호감도
+  activities: FestivalActivity[]
+}
+
+export interface FestivalActivityResult {
+  activityId: string
+  name: string
+  icon: string
+  description: string
+  companionDescription?: string
+  statChanges?: Partial<Stats>
+  goldChange?: number
+  stressChange?: number
+  healthChange?: number
+  worldKnowledgeChange?: number
+  affectionGain?: number
+  outfitReward?: string
+}
+
 export interface Item {
   id: string
   name: string
@@ -372,6 +428,7 @@ export type GameScreen =
   | "dungeon-result"
   | "npc"
   | "settings"
+  | "festival"
 
 // 세이브 슬롯
 export interface SaveSlot {
@@ -418,6 +475,11 @@ interface GameState {
   currentEvent: AdventureEvent | null
   currentSeasonalEvent: SeasonalEvent | null
   currentEventResult: EventResult | null
+  currentFestivalEvent: FestivalEvent | null
+  festivalCompanionId: string | null   // NPC id, "father", or null
+  festivalAP: number
+  festivalActivitiesDone: string[]
+  festivalResults: FestivalActivityResult[]
   ending: Ending | null
   gameStarted: boolean
   eventLog: string[]
@@ -434,15 +496,21 @@ interface GameState {
   resolveEvent: (choiceIndex: number) => void
   resolveSeasonalEvent: (choiceIndex: number) => void
   clearEventResult: () => void
-  wanderingMerchantActive: boolean   // 이번 주 상인 마을 방문 여부
-  wanderingMerchantOpen: boolean     // 팝업 열림 여부
-  dismissWanderingMerchant: () => void  // 팝업 닫기 (상인은 여전히 마을에 있음)
-  openWanderingMerchant: () => void    // 팝업 다시 열기
+  wanderingMerchantActive: boolean
+  wanderingMerchantOpen: boolean
+  dismissWanderingMerchant: () => void
+  openWanderingMerchant: () => void
   buyItem: (item: Item, quantity?: number) => boolean
+  // 축제
+  selectFestivalCompanion: (companionId: string | null) => void
+  doFestivalActivity: (activityId: string) => boolean
+  endFestival: () => void
   useItem: (itemId: string) => boolean
   advanceTime: () => void
   checkEnding: () => Ending | null
   debugJumpTo: (year: number, month: number, week: number) => void
+  debugFireEvent: () => void
+  debugSetStat: (stat: string, value: number) => void
   getQualifiedEndings: () => Ending[]
   viewEnding: (endingId: string) => void
   setWeekSchedule: (schedule: (string | null)[]) => void
@@ -1275,6 +1343,135 @@ export const SEASONAL_EVENTS: SeasonalEvent[] = [
   },
 ]
 
+// ────────────────────────────────────────────────────────────────
+// 축제 이벤트 데이터
+// ────────────────────────────────────────────────────────────────
+export const FESTIVAL_EVENTS: FestivalEvent[] = [
+  // ── 봄: 아버지와 소풍 (1년차) ──────────────────────────────────
+  {
+    id: "spring-father-picnic", type: "festival", season: "spring",
+    title: "🌸 봄 소풍", maxYear: 1, companionType: "father", totalAP: 3,
+    description: "따뜻한 봄날, 아버지가 소풍을 제안하셨다. 마을 곳곳을 함께 돌아다니며 봄의 정취를 느껴보자.",
+    activities: [
+      { id: "picnic-lunch", name: "도시락 먹기", icon: "🍱", description: "아버지가 싸온 도시락을 펼친다.", apCost: 1,
+        outcome: { description: "풀밭에 앉아 아버지가 싸온 도시락을 함께 먹었다. 소박하지만 맛있었고, 아버지의 이야기가 마음을 따뜻하게 채웠다.", stressChange: -15, statChanges: { morality: 2 } } },
+      { id: "picnic-walk", name: "꽃길 산책", icon: "🌼", description: "꽃이 핀 길을 아버지와 걷는다.", apCost: 1,
+        outcome: { description: "벚꽃이 흐드러진 오솔길을 아버지와 나란히 걸었다. 아버지의 어린 시절 이야기를 처음 들었다.", stressChange: -10, statChanges: { morality: 2, charm: 1 } } },
+      { id: "picnic-stream", name: "개울가 놀기", icon: "🏞️", description: "개울가에서 아버지와 함께 논다.", apCost: 1,
+        outcome: { description: "차가운 개울물에 발을 담그고 아버지와 물고기를 쫓았다. 오랜만에 어린아이처럼 웃었다.", stressChange: -20, statChanges: { strength: 1 } } },
+      { id: "picnic-flowers", name: "꽃다발 만들기", icon: "💐", description: "들판에서 꽃을 꺾어 꽃다발을 만든다.", apCost: 1,
+        outcome: { description: "정성껏 만든 꽃다발을 아버지께 드렸다. 아버지의 눈가가 촉촉해졌다. '어머 생각나는구나'라고 중얼거리셨다.", statChanges: { creativity: 2, morality: 3 } } },
+      { id: "picnic-talk", name: "아버지와 대화", icon: "💬", description: "아버지께 고민을 털어놓는다.", apCost: 1,
+        outcome: { description: "아버지는 조용히 이야기를 들어주셨다. '네가 선택한 길을 믿어. 아버지는 항상 네 편이야.' 라는 말이 마음에 오래 남았다.", stressChange: -12, statChanges: { morality: 3, faith: 2 } } },
+    ],
+  },
+
+  // ── 봄: 꽃축제 (2년차~) ────────────────────────────────────────
+  {
+    id: "spring-flower-festival", type: "festival", season: "spring",
+    title: "🌸 봄 꽃축제", minYear: 2, companionType: "npc", companionMinAffection: 20, totalAP: 3,
+    description: "왕도 광장에서 성대한 봄 꽃축제가 열렸다. 알록달록한 꽃들이 가득하고, 활기찬 사람들이 거리를 가득 채우고 있다.",
+    activities: [
+      { id: "flower-booth", name: "꽃꽂이 체험", icon: "🌺", description: "꽃꽂이 부스에서 꽃을 직접 꽂아본다.", apCost: 1, requirements: { creativity: 30 },
+        outcome: { description: "꽃의 아름다움에 흠뻑 빠졌다. 색깔을 고르고 배치하다 보니 어느새 꽤 그럴싸한 작품이 완성됐다.", statChanges: { creativity: 3, charm: 2 }, affectionGain: 8 },
+        companionBonus: { description: "와 함께 서로에게 어울리는 꽃 색을 골라줬다. 자꾸 웃음이 나왔다." } },
+      { id: "flower-food", name: "길거리 음식", icon: "🍡", description: "축제 포장마차에서 음식을 즐긴다.", apCost: 1,
+        outcome: { description: "달콤한 꽃 사탕과 찹쌀떡을 사먹었다. 축제의 달콤한 분위기가 입안에 가득 퍼졌다.", stressChange: -12, goldChange: -15, affectionGain: 6 },
+        companionBonus: { description: "와 이것저것 집어먹으며 돌아다녔다. 서로 맛없는 것 추천하며 장난을 쳤다." } },
+      { id: "flower-lottery", name: "행운권 뽑기", icon: "🎰", description: "행운권 부스에서 운을 시험해본다.", apCost: 1,
+        outcome: { description: "두근두근 행운권을 뽑았다. 작은 꽃 장식품을 얻었다!", goldChange: 40, affectionGain: 5 },
+        companionBonus: { description: "와 함께 두근거리며 뽑았다. 당첨될 때마다 함께 환호했다." } },
+      { id: "flower-parade", name: "퍼레이드 구경", icon: "🎭", description: "화려한 꽃 퍼레이드를 바라본다.", apCost: 1,
+        outcome: { description: "눈부신 꽃 퍼레이드가 광장을 가로질렀다. 꽃비가 내리는 가운데 넋을 잃고 바라봤다.", stressChange: -10, statChanges: { charm: 2 }, affectionGain: 7 },
+        companionBonus: { description: "와 어깨를 나란히 하고 퍼레이드를 바라봤다. 꽃잎이 머리 위로 떨어졌다." } },
+      { id: "flower-contest", name: "꽃꽂이 대회 참가", icon: "🏆", description: "꽃꽂이 대회에 출전한다. (예술 100 필요)", apCost: 2, requirements: { creativity: 100 },
+        outcome: { description: "섬세한 감각으로 아름다운 작품을 완성해 대상을 수상했다! 꽃의 여왕 화관을 상으로 받았다!", statChanges: { creativity: 5, charm: 3 }, goldChange: 80, outfitReward: "flower-crown", affectionGain: 12 },
+        companionBonus: { description: "가 심사위원 앞에서도 열렬히 응원해줬다. 덕분에 긴장이 풀렸다." } },
+    ],
+  },
+
+  // ── 여름: 바다 축제 ─────────────────────────────────────────────
+  {
+    id: "summer-beach-festival", type: "festival", season: "summer",
+    title: "☀️ 여름 바다 축제", companionType: "npc", companionMinAffection: 20, totalAP: 3,
+    description: "무더운 여름, 해변에서 성대한 바다 축제가 열렸다. 시원한 파도 소리와 함께 축제의 열기가 달아오른다.",
+    activities: [
+      { id: "beach-swim", name: "바다 수영", icon: "🏊", description: "시원한 바다에서 수영을 즐긴다.", apCost: 1, requirements: { strength: 30 },
+        outcome: { description: "시원한 파도를 가르며 힘껏 헤엄쳤다. 상쾌함이 온몸에 퍼진다.", stressChange: -15, statChanges: { strength: 2 }, affectionGain: 8 },
+        companionBonus: { description: "와 수영 시합을 벌였다. 결과는... 비밀이다." } },
+      { id: "beach-shell", name: "조개 줍기", icon: "🐚", description: "해변을 거닐며 예쁜 조개를 줍는다.", apCost: 1,
+        outcome: { description: "반짝이는 조개와 고운 돌멩이를 모았다. 소소하지만 기분 좋은 시간이었다.", stressChange: -10, statChanges: { creativity: 2 }, affectionGain: 6 },
+        companionBonus: { description: "와 예쁜 조개를 찾아 경쟁하다가, 서로 가장 예쁜 것을 골라 교환했다." } },
+      { id: "beach-food", name: "해변 포장마차", icon: "🍦", description: "시원한 아이스크림과 해산물을 즐긴다.", apCost: 1,
+        outcome: { description: "커다란 아이스크림을 먹으며 바다를 바라봤다. 여름이 이래서 좋다.", stressChange: -13, goldChange: -20, affectionGain: 6 },
+        companionBonus: { description: "와 아이스크림을 나눠 먹다가 서로 얼굴에 묻혀버렸다. 웃음이 터졌다." } },
+      { id: "beach-fishing", name: "낚시하기", icon: "🎣", description: "바다에서 낚시를 즐긴다.", apCost: 1,
+        outcome: { description: "한적한 곳에서 낚싯대를 드리웠다. 뜻밖에 큼직한 물고기를 낚았다!", statChanges: { housework: 2 }, goldChange: 35, affectionGain: 5 },
+        companionBonus: { description: "와 나란히 낚싯대를 드리웠다. 조용한 시간이 오히려 편안하고 좋았다." } },
+      { id: "beach-contest", name: "수영 대회 참가", icon: "🥇", description: "수영 대회에 출전한다. (체력 110 필요)", apCost: 2, requirements: { strength: 110 },
+        outcome: { description: "파도를 헤치고 선두로 결승선을 통과했다! 함성 속에 수영복을 상으로 받았다!", statChanges: { strength: 4, combat: 1 }, goldChange: 60, outfitReward: "swimsuit", affectionGain: 12 },
+        companionBonus: { description: "가 해변에서 목이 터져라 응원해줬다. 그 목소리 덕분에 힘이 불끈 솟았다." } },
+      { id: "beach-fireworks", name: "불꽃놀이 감상", icon: "🎆", description: "밤하늘을 수놓는 불꽃놀이를 바라본다.", apCost: 1,
+        outcome: { description: "밤바다 위로 화려한 불꽃이 터졌다. 잠시 일상을 잊고 순수하게 감동받았다.", stressChange: -18, statChanges: { charm: 2, faith: 1 }, affectionGain: 15 },
+        companionBonus: { description: "와 나란히 불꽃놀이를 올려다봤다. 문득 이 순간이, 이 사람과의 시간이 소중하다고 느꼈다." } },
+    ],
+  },
+
+  // ── 가을: 수확제 & 무도회 ─────────────────────────────────────
+  {
+    id: "fall-harvest-festival", type: "festival", season: "fall",
+    title: "🍂 가을 수확제 & 무도회", companionType: "npc", companionMinAffection: 20, totalAP: 3,
+    description: "풍성한 수확의 계절. 낮에는 마을 수확제에서 축제를 즐기고, 저녁에는 아카데미 무도회가 열린다.",
+    activities: [
+      { id: "harvest-help", name: "추수 돕기", icon: "🌾", description: "농부들과 함께 수확을 돕는다.", apCost: 1,
+        outcome: { description: "땀 흘려 추수를 도왔다. 몸은 고되지만 가슴 뿌듯한 보람이 있다.", statChanges: { strength: 2, housework: 2, morality: 1 }, goldChange: 50, affectionGain: 5 },
+        companionBonus: { description: "와 묵묵히 함께 일했다. 말 없이 나란히 하는 시간이 더 깊게 남았다." } },
+      { id: "harvest-cook", name: "요리 체험", icon: "🍲", description: "축제 부스에서 제철 음식을 만들어본다.", apCost: 1, requirements: { cooking: 30 },
+        outcome: { description: "가을 식재료로 따뜻한 음식을 완성했다. 따뜻한 음식 냄새가 마음을 가득 채웠다.", stressChange: -10, statChanges: { cooking: 3, charm: 1 }, affectionGain: 8 },
+        companionBonus: { description: "와 함께 요리했는데, 서로 역할을 나눠 맡았다. 의외로 호흡이 잘 맞았다." } },
+      { id: "harvest-market", name: "시장 구경", icon: "🏮", description: "수확제 시장을 돌아다니며 구경한다.", apCost: 1,
+        outcome: { description: "알록달록한 가을 특산물이 가득한 시장을 구경했다. 흥정하는 상인들의 목소리가 활기를 더했다.", stressChange: -8, statChanges: { intelligence: 1, charm: 1 }, goldChange: -10, affectionGain: 6 },
+        companionBonus: { description: "와 이것저것 시식하며 돌아다녔다. 자꾸 서로 웃음이 나왔다." } },
+      { id: "harvest-contest", name: "요리 대회 참가", icon: "🏆", description: "수확제 요리 대회에 출전한다. (요리 125 필요)", apCost: 2, requirements: { cooking: 125 },
+        outcome: { description: "계절 식재료로 훌륭한 요리를 선보여 대상을 수상했다! 요리사 조리복을 상으로 받았다!", statChanges: { cooking: 5, charm: 3 }, goldChange: 100, outfitReward: "chef", affectionGain: 12 },
+        companionBonus: { description: "가 심사위원들 앞에서도 당당하게 응원해줬다. 긴장이 싹 풀렸다." } },
+      { id: "harvest-ritual", name: "고대 수확 의식", icon: "🌕", description: "오래된 수확 감사 의식에 참여한다. (신앙 125 필요)", apCost: 2, requirements: { faith: 125 },
+        outcome: { description: "대지의 정령과 교감하는 신비로운 의식이었다. 이 세계의 순환에 대해 조금 더 깊이 이해하게 됐다.", statChanges: { faith: 5, magic: 3 }, worldKnowledgeChange: 12, affectionGain: 8 },
+        companionBonus: { description: "도 함께 의식에 참여했다. 신비로운 경험을 공유한 것이 묘하게 우릴 가까워지게 했다." } },
+      { id: "harvest-dance", name: "무도회 댄스", icon: "💃", description: "저녁 무도회에서 파트너와 춤을 춘다. (매력 100, 동반자 필요)", apCost: 2, requirements: { charm: 100 }, requiresCompanion: true, minYear: 2,
+        outcome: { description: "화려한 무도회장에서 파트너와 우아하게 춤을 췄다. 파티 드레스를 선물로 받았다!", statChanges: { charm: 5, morality: 2 }, outfitReward: "party-dress", affectionGain: 25 },
+        companionBonus: { description: "와 눈을 맞추며 춤을 췄다. 음악이 흐르는 동안 세상에 둘만 있는 것 같았다." } },
+    ],
+  },
+
+  // ── 겨울: 눈 축제 ──────────────────────────────────────────────
+  {
+    id: "winter-snow-festival", type: "festival", season: "winter",
+    title: "❄️ 겨울 눈 축제", companionType: "npc", companionMinAffection: 20, totalAP: 3,
+    description: "왕도 전체가 하얀 눈으로 뒤덮였다. 겨울 축제의 불빛이 눈 위에 반짝이며, 사람들의 웃음소리가 거리 가득 울려 퍼진다.",
+    activities: [
+      { id: "snow-fight", name: "눈싸움", icon: "❄️", description: "신나게 눈싸움을 즐긴다.", apCost: 1,
+        outcome: { description: "눈덩이를 던지고 피하며 신나게 뛰어다녔다. 어린 시절로 돌아간 것 같았다.", stressChange: -18, statChanges: { combat: 1, strength: 1 }, affectionGain: 10 },
+        companionBonus: { description: "와 둘이서 다른 사람들에게 맞서 눈싸움을 벌였다. 완벽한 팀이었다." } },
+      { id: "snow-man", name: "눈사람 만들기", icon: "⛄", description: "정성껏 눈사람을 만든다.", apCost: 1,
+        outcome: { description: "크고 귀여운 눈사람을 완성했다. 오늘의 추위가 이 눈사람 덕분에 따뜻하게 기억될 것 같다.", stressChange: -12, statChanges: { creativity: 2 }, affectionGain: 8 },
+        companionBonus: { description: "와 함께 만든 눈사람은 누가 먼저랄 것도 없이 서로를 닮아 있었다." } },
+      { id: "snow-sled", name: "썰매 타기", icon: "🛷", description: "언덕에서 신나게 썰매를 탄다.", apCost: 1,
+        outcome: { description: "언덕을 가르며 내달리는 기분이 짜릿했다. 차가운 바람이 뺨을 스쳐 지나갔다.", stressChange: -15, statChanges: { strength: 2 }, affectionGain: 8 },
+        companionBonus: { description: "와 함께 썰매에 탔다. 내리막에서 자꾸 웃음이 터져나왔다." } },
+      { id: "snow-drink", name: "따뜻한 음료", icon: "☕", description: "노점에서 따뜻한 음료를 마신다.", apCost: 1,
+        outcome: { description: "손을 녹이며 따뜻한 코코아를 홀짝였다. 몸과 마음이 모두 녹아내리는 것 같았다.", stressChange: -18, healthChange: 20, goldChange: -10, affectionGain: 7 },
+        companionBonus: { description: "와 마주 앉아 따뜻한 음료를 나눠 마셨다. 말이 필요 없는, 따뜻한 시간이었다." } },
+      { id: "snow-lantern", name: "소원 등불 날리기", icon: "🏮", description: "소원을 빌며 등불을 하늘로 날린다.", apCost: 1,
+        outcome: { description: "손바닥 위의 등불이 밤하늘로 천천히 떠올랐다. 이루어질 것 같은 이상한 확신이 들었다.", stressChange: -10, statChanges: { faith: 2, morality: 1 }, affectionGain: 12 },
+        companionBonus: { description: "와 나란히 등불을 날렸다. 어떤 소원을 빌었는지 서로 물었지만, 둘 다 비밀이라고 웃으며 답했다." } },
+      { id: "snow-ritual", name: "동지 의식", icon: "🕯️", description: "고대 동지 의식에 참여한다. (신앙 150, 마법 150 필요)", apCost: 2, requirements: { faith: 150, magic: 150 },
+        outcome: { description: "어둠과 빛의 균형 속에서 세계의 깊은 진실을 엿본 것 같았다. 신녀 복장이 하사됐다!", statChanges: { faith: 6, magic: 6 }, worldKnowledgeChange: 20, outfitReward: "priestess", affectionGain: 10 },
+        companionBonus: { description: "도 함께 의식에 참여했다. 신비로운 빛 속에서 서로의 눈이 마주쳤다." } },
+    ],
+  },
+]
+
 // Dungeon Enemies (per dungeon)
 export const DUNGEON_ENEMIES: DungeonEnemy[] = [
   // ── 변방의 숲 ──────────────────────────────────────────
@@ -1710,6 +1907,11 @@ export const useGameStore = create<GameState>((set, get) => ({
   currentEvent: null,
   currentSeasonalEvent: null,
   currentEventResult: null,
+  currentFestivalEvent: null,
+  festivalCompanionId: null,
+  festivalAP: 0,
+  festivalActivitiesDone: [],
+  festivalResults: [],
   ending: null,
   gameStarted: false,
   eventLog: [],
@@ -1743,6 +1945,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       weekSchedule: [null, null, null, null, null, null, null], weekResult: null, resultWeek: 1, resultMonth: 1,
       inventory: [],
       currentEvent: null, currentSeasonalEvent: null, currentEventResult: null,
+      currentFestivalEvent: null, festivalCompanionId: null, festivalAP: 0,
+      festivalActivitiesDone: [], festivalResults: [],
       ending: null, gameStarted: true, eventLog: [], dungeon: { ...initialDungeon },
       wanderingMerchantActive: false,
       wanderingMerchantOpen: false,
@@ -1760,6 +1964,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       weekSchedule: [null, null, null, null, null, null, null], weekResult: null, resultWeek: 1, resultMonth: 1,
       inventory: [],
       currentEvent: null, currentSeasonalEvent: null, currentEventResult: null,
+      currentFestivalEvent: null, festivalCompanionId: null, festivalAP: 0,
+      festivalActivitiesDone: [], festivalResults: [],
       ending: null, gameStarted: false, eventLog: [], dungeon: { ...initialDungeon },
       wanderingMerchantActive: false,
       wanderingMerchantOpen: false,
@@ -2479,6 +2685,103 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ wanderingMerchantOpen: true })
   },
 
+  selectFestivalCompanion: (companionId) => {
+    set({ festivalCompanionId: companionId })
+  },
+
+  doFestivalActivity: (activityId) => {
+    const state = get()
+    const { currentFestivalEvent, festivalAP, festivalActivitiesDone, festivalCompanionId, festivalResults } = state
+    if (!currentFestivalEvent) return false
+    const activity = currentFestivalEvent.activities.find(a => a.id === activityId)
+    if (!activity) return false
+    if (festivalAP < activity.apCost) return false
+    if (festivalActivitiesDone.includes(activityId)) return false
+    if (activity.requiresCompanion && !festivalCompanionId) return false
+    if (activity.minYear && state.year < activity.minYear) return false
+    if (activity.requirements) {
+      for (const [stat, val] of Object.entries(activity.requirements)) {
+        if ((state.character.stats[stat as keyof Stats] || 0) < (val || 0)) return false
+      }
+    }
+
+    const result: FestivalActivityResult = {
+      activityId,
+      name: activity.name,
+      icon: activity.icon,
+      description: activity.outcome.description,
+      companionDescription: (festivalCompanionId && activity.companionBonus) ? activity.companionBonus.description : undefined,
+      statChanges: activity.outcome.statChanges,
+      goldChange: activity.outcome.goldChange,
+      stressChange: activity.outcome.stressChange,
+      healthChange: activity.outcome.healthChange,
+      worldKnowledgeChange: activity.outcome.worldKnowledgeChange,
+      affectionGain: activity.outcome.affectionGain,
+      outfitReward: activity.outcome.outfitReward,
+    }
+
+    const newStats = { ...state.character.stats }
+    if (activity.outcome.statChanges) {
+      for (const [stat, val] of Object.entries(activity.outcome.statChanges)) {
+        newStats[stat as keyof Stats] = Math.min(500, Math.max(0, (newStats[stat as keyof Stats] || 0) + (val || 0)))
+      }
+    }
+
+    let newHealth = state.character.health
+    let newStress = state.character.stress
+    let newGold = state.gold
+    let newWorldKnowledge = state.character.worldKnowledge
+
+    if (activity.outcome.healthChange) newHealth = Math.min(state.character.maxHealth, Math.max(1, newHealth + activity.outcome.healthChange))
+    if (activity.outcome.stressChange) newStress = Math.min(100, Math.max(0, newStress + activity.outcome.stressChange))
+    if (activity.outcome.goldChange) newGold = Math.max(0, newGold + activity.outcome.goldChange)
+    if (activity.outcome.worldKnowledgeChange) newWorldKnowledge = Math.min(100, Math.max(0, newWorldKnowledge + activity.outcome.worldKnowledgeChange))
+
+    const newNpcAffection = { ...state.character.npcAffection }
+    if (activity.outcome.affectionGain && festivalCompanionId && festivalCompanionId !== "father") {
+      newNpcAffection[festivalCompanionId] = Math.min(100, (newNpcAffection[festivalCompanionId] || 0) + activity.outcome.affectionGain)
+    }
+
+    const newOwnedOutfits = [...state.character.ownedOutfits]
+    if (activity.outcome.outfitReward && !newOwnedOutfits.includes(activity.outcome.outfitReward)) {
+      newOwnedOutfits.push(activity.outcome.outfitReward)
+    }
+
+    set({
+      festivalAP: festivalAP - activity.apCost,
+      festivalActivitiesDone: [...festivalActivitiesDone, activityId],
+      festivalResults: [...festivalResults, result],
+      character: {
+        ...state.character,
+        stats: newStats,
+        health: newHealth,
+        stress: newStress,
+        worldKnowledge: newWorldKnowledge,
+        npcAffection: newNpcAffection,
+        ownedOutfits: newOwnedOutfits,
+      },
+      gold: newGold,
+    })
+    return true
+  },
+
+  endFestival: () => {
+    const state = get()
+    if (state.festivalResults.length > 0) {
+      const names = state.festivalResults.map(r => r.name).join(', ')
+      get().addLog(`🎉 축제 참가: ${names}`)
+    }
+    set({
+      currentFestivalEvent: null,
+      festivalCompanionId: null,
+      festivalAP: 0,
+      festivalActivitiesDone: [],
+      festivalResults: [],
+      screen: "game",
+    })
+    get().advanceTime()
+  },
+
   useItem: (itemId) => {
     const state = get()
     const item = state.inventory.find((i) => i.id === itemId)
@@ -2508,8 +2811,33 @@ export const useGameStore = create<GameState>((set, get) => ({
       week = 1
       month++
 
-      // Check seasonal event
+      // 계절 축제 이벤트 (3·6·9·12월) – 행동포인트 기반 대형 이벤트
       if (month === 3 || month === 6 || month === 9 || month === 12) {
+        const season = getSeason(month)
+        const availableFestivals = FESTIVAL_EVENTS.filter(e =>
+          e.season === season &&
+          !state.seasonalEventsTriggered.includes(`${year}-${e.id}`) &&
+          (e.minYear === undefined || year >= e.minYear) &&
+          (e.maxYear === undefined || year <= e.maxYear)
+        )
+        if (availableFestivals.length > 0) {
+          const festival = availableFestivals[Math.floor(Math.random() * availableFestivals.length)]
+          // 동반자 조건 확인: NPC 필요 시 충족 가능한 NPC 목록으로 companion 선택 화면으로 이동
+          set({
+            currentFestivalEvent: festival,
+            festivalAP: festival.totalAP,
+            festivalActivitiesDone: [],
+            festivalResults: [],
+            festivalCompanionId: null,
+            seasonalEventsTriggered: [...state.seasonalEventsTriggered, `${year}-${festival.id}`],
+            screen: "festival",
+          })
+          return
+        }
+      }
+
+      // 일반 계절 이벤트 (1·4·7·10월)
+      if (month === 1 || month === 4 || month === 7 || month === 10) {
         const season = getSeason(month)
         const availableEvents = SEASONAL_EVENTS.filter(e =>
           e.season === season &&
@@ -2581,6 +2909,55 @@ export const useGameStore = create<GameState>((set, get) => ({
     })
     get()._updateSeasonalShop(clampedMonth, clampedYear)
     get().addLog(`🛠️ [디버그] ${clampedYear}년차 ${clampedMonth}월 ${clampedWeek}주차로 이동했습니다.`)
+  },
+
+  debugFireEvent: () => {
+    const state = get()
+    const { year, month } = state
+    // 축제 이벤트 (3·6·9·12월)
+    if (month === 3 || month === 6 || month === 9 || month === 12) {
+      const season = getSeason(month)
+      const available = FESTIVAL_EVENTS.filter(e =>
+        e.season === season &&
+        (e.minYear === undefined || year >= e.minYear) &&
+        (e.maxYear === undefined || year <= e.maxYear)
+      )
+      if (available.length > 0) {
+        const festival = available[0]
+        set({
+          currentFestivalEvent: festival,
+          festivalAP: festival.totalAP,
+          festivalActivitiesDone: [],
+          festivalResults: [],
+          festivalCompanionId: null,
+          screen: "festival",
+        })
+        get().addLog(`🛠️ [디버그] 축제 이벤트 발동: ${festival.title}`)
+        return
+      }
+    }
+    // 일반 계절 이벤트 (1·4·7·10월)
+    if (month === 1 || month === 4 || month === 7 || month === 10) {
+      const season = getSeason(month)
+      const available = SEASONAL_EVENTS.filter(e =>
+        e.season === season &&
+        (e.minYear === undefined || year >= e.minYear) &&
+        (e.maxYear === undefined || year <= e.maxYear)
+      )
+      if (available.length > 0) {
+        const event = available[0]
+        set({ currentSeasonalEvent: event, screen: "seasonal" })
+        get().addLog(`🛠️ [디버그] 계절 이벤트 발동: ${event.title}`)
+        return
+      }
+    }
+    get().addLog(`🛠️ [디버그] 현재 월(${month}월)에 발동할 이벤트가 없습니다.`)
+  },
+
+  debugSetStat: (stat, value) => {
+    const state = get()
+    const clamped = Math.max(0, Math.min(500, value))
+    set({ character: { ...state.character, stats: { ...state.character.stats, [stat]: clamped } } })
   },
 
   checkEnding: () => {

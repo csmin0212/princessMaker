@@ -1,9 +1,10 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useGameStore } from "@/lib/game-store"
+import { useGameStore, NPCS } from "@/lib/game-store"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { cn } from "@/lib/utils"
 
 // ── 오디오 설정은 localStorage에 저장 ────────────────────────────
 const LS_AUDIO = "princess_audio_settings"
@@ -48,7 +49,7 @@ export function SettingsScreen() {
   const {
     setScreen, prevScreen, saveGame, loadGame, getSaveSlots, deleteSave,
     gameStarted, character, resetGame, year, month, week, gold,
-    debugJumpTo,
+    debugJumpTo, debugFireEvent, debugSetStat,
   } = useGameStore()
 
   const [audio, setAudio] = useState<AudioSettings>(loadAudioSettings)
@@ -205,62 +206,104 @@ export function SettingsScreen() {
               <CardHeader className="pb-2"><CardTitle className="text-base">현재 상태</CardTitle></CardHeader>
               <CardContent className="text-sm space-y-1 text-muted-foreground">
                 <p>📅 {year}년차 {month}월 {week}주차 {SEASONS[month]}</p>
-                <p>💰 골드: {gold}G</p>
-                <p>👤 {character.name} / {character.age}세</p>
+                <p>💰 골드: {gold}G · 👤 {character.name} / {character.age}세</p>
               </CardContent>
             </Card>
 
-            {/* 날짜 이동 */}
+            {/* ── 날짜 이동 ── */}
             <Card>
               <CardHeader className="pb-2"><CardTitle className="text-base">📅 날짜 이동</CardTitle></CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="text-xs text-muted-foreground block mb-1">연차 (1~8)</label>
-                    <input type="number" min={1} max={8} value={dbYear}
-                      onChange={e => setDbYear(Number(e.target.value))}
-                      className="w-full border rounded px-2 py-1.5 text-sm bg-background text-center" />
+
+                {/* 연차 슬라이더 */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-muted-foreground">연차</label>
+                    <span className="text-sm font-bold tabular-nums">{dbYear}년차 (만 {9 + dbYear}세)</span>
                   </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground block mb-1">월 (1~12)</label>
-                    <input type="number" min={1} max={12} value={dbMonth}
-                      onChange={e => setDbMonth(Number(e.target.value))}
-                      className="w-full border rounded px-2 py-1.5 text-sm bg-background text-center" />
-                  </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground block mb-1">주차 (1~4)</label>
-                    <input type="number" min={1} max={4} value={dbWeek}
-                      onChange={e => setDbWeek(Number(e.target.value))}
-                      className="w-full border rounded px-2 py-1.5 text-sm bg-background text-center" />
+                  <input type="range" min={1} max={8} step={1} value={dbYear}
+                    onChange={e => setDbYear(Number(e.target.value))}
+                    className="w-full accent-orange-500" />
+                  <div className="flex justify-between text-xs text-muted-foreground mt-0.5">
+                    {[1,2,3,4,5,6,7,8].map(y => (
+                      <span key={y} className={cn(y === dbYear && "text-orange-600 font-bold")}>{y}</span>
+                    ))}
                   </div>
                 </div>
-                {/* 빠른 선택 */}
+
+                {/* 월 그리드 – 이벤트 월 강조 */}
                 <div>
-                  <p className="text-xs text-muted-foreground mb-2">빠른 이동</p>
-                  <div className="flex flex-wrap gap-2">
-                    {[
-                      { label: "1년차 봄", y:1, m:3, w:1 },
-                      { label: "2년차 봄", y:2, m:3, w:1 },
-                      { label: "2년차 여름", y:2, m:6, w:1 },
-                      { label: "3년차", y:3, m:1, w:1 },
-                      { label: "4년차", y:4, m:1, w:1 },
-                      { label: "8년차 겨울", y:8, m:12, w:4 },
-                    ].map(({ label, y, m, w }) => (
-                      <button key={label}
-                        onClick={() => { setDbYear(y); setDbMonth(m); setDbWeek(w) }}
-                        className="text-xs bg-muted hover:bg-muted/70 rounded px-2 py-1 border">
-                        {label}
+                  <label className="text-xs text-muted-foreground block mb-2">
+                    월 &nbsp;
+                    <span className="inline-flex gap-2 text-[10px]">
+                      <span className="text-violet-600">■ 축제월</span>
+                      <span className="text-blue-600">■ 이벤트월</span>
+                    </span>
+                  </label>
+                  <div className="grid grid-cols-6 gap-1">
+                    {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => {
+                      const isFestival = [3,6,9,12].includes(m)
+                      const isEvent    = [1,4,7,10].includes(m)
+                      const selected   = m === dbMonth
+                      return (
+                        <button key={m} onClick={() => setDbMonth(m)}
+                          className={cn(
+                            "rounded py-1.5 text-xs font-medium border transition-all",
+                            selected
+                              ? "bg-orange-500 text-white border-orange-500"
+                              : isFestival
+                                ? "bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100"
+                                : isEvent
+                                  ? "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
+                                  : "bg-muted/40 border-border hover:bg-muted"
+                          )}>
+                          {m}월
+                          {isFestival && !selected && <span className="block text-[9px] leading-none text-violet-500">축제</span>}
+                          {isEvent    && !selected && <span className="block text-[9px] leading-none text-blue-500">이벤트</span>}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* 주차 */}
+                <div>
+                  <label className="text-xs text-muted-foreground block mb-2">주차</label>
+                  <div className="flex gap-2">
+                    {[1,2,3,4].map(w => (
+                      <button key={w} onClick={() => setDbWeek(w)}
+                        className={cn(
+                          "flex-1 rounded py-1.5 text-sm font-medium border transition-all",
+                          w === dbWeek ? "bg-orange-500 text-white border-orange-500" : "bg-muted/40 border-border hover:bg-muted"
+                        )}>
+                        {w}주
                       </button>
                     ))}
                   </div>
                 </div>
-                <Button onClick={handleDebugJump} className="w-full bg-orange-500 hover:bg-orange-600 text-white">
+
+                {/* 이동 버튼 */}
+                <Button onClick={handleDebugJump} className="w-full bg-orange-500 hover:bg-orange-600 text-white gap-2">
                   🚀 {dbYear}년차 {dbMonth}월 {dbWeek}주차로 이동
                 </Button>
+
+                {/* 이벤트 발동 */}
+                <div className="border-t pt-3 space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    현재 위치({month}월)의 이벤트를 즉시 발동합니다.
+                    {[3,6,9,12].includes(month) && <span className="text-violet-600 ml-1">→ 축제 이벤트</span>}
+                    {[1,4,7,10].includes(month) && <span className="text-blue-600 ml-1">→ 계절 이벤트</span>}
+                    {![1,3,4,6,7,9,10,12].includes(month) && <span className="text-muted-foreground ml-1">→ 이벤트 없는 달</span>}
+                  </p>
+                  <Button variant="outline" onClick={() => { debugFireEvent(); setScreen((prevScreen as any) ?? "game") }}
+                    className="w-full border-violet-300 text-violet-700 hover:bg-violet-50 gap-2">
+                    🎉 현재 월 이벤트 즉시 발동
+                  </Button>
+                </div>
               </CardContent>
             </Card>
 
-            {/* 골드 조정 */}
+            {/* ── 골드 조정 ── */}
             <Card>
               <CardHeader className="pb-2"><CardTitle className="text-base">💰 골드 조정</CardTitle></CardHeader>
               <CardContent className="space-y-3">
@@ -269,7 +312,7 @@ export function SettingsScreen() {
                     onChange={e => setDbGold(Number(e.target.value))}
                     className="flex-1 border rounded px-3 py-1.5 text-sm bg-background" />
                   <span className="text-sm text-muted-foreground">G</span>
-                  <Button size="sm" variant="outline" onClick={() => { useGameStore.setState({ gold: dbGold }); }}>
+                  <Button size="sm" variant="outline" onClick={() => { useGameStore.setState({ gold: dbGold }) }}>
                     설정
                   </Button>
                 </div>
@@ -281,6 +324,67 @@ export function SettingsScreen() {
                     </button>
                   ))}
                 </div>
+              </CardContent>
+            </Card>
+
+            {/* ── NPC 호감도 조정 ── */}
+            <Card>
+              <CardHeader className="pb-2"><CardTitle className="text-base">💗 NPC 호감도</CardTitle></CardHeader>
+              <CardContent className="space-y-2">
+                {NPCS.map(npc => {
+                  const aff = character.npcAffection[npc.id] || 0
+                  return (
+                    <div key={npc.id} className="flex items-center gap-2">
+                      <span className="text-lg w-7 text-center flex-shrink-0">{npc.icon}</span>
+                      <span className="text-xs w-14 shrink-0 truncate">{npc.name}</span>
+                      <input type="range" min={0} max={100} step={5} value={aff}
+                        onChange={e => useGameStore.setState(s => ({
+                          character: { ...s.character, npcAffection: { ...s.character.npcAffection, [npc.id]: Number(e.target.value) } }
+                        }))}
+                        className="flex-1 accent-rose-400" />
+                      <span className="text-xs w-8 text-right tabular-nums text-rose-500">{aff}</span>
+                    </div>
+                  )
+                })}
+                <Button size="sm" variant="outline" className="w-full text-xs mt-2"
+                  onClick={() => {
+                    const maxAff = Object.fromEntries(NPCS.map(n => [n.id, 100]))
+                    useGameStore.setState(s => ({ character: { ...s.character, npcAffection: maxAff } }))
+                  }}>
+                  전체 호감도 MAX
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* ── 스탯 조정 ── */}
+            <Card>
+              <CardHeader className="pb-2"><CardTitle className="text-base">📊 스탯 조정</CardTitle></CardHeader>
+              <CardContent className="space-y-2">
+                {(["strength","intelligence","charm","creativity","morality","faith","combat","magic","cooking","housework"] as const).map(stat => {
+                  const val = character.stats[stat] || 0
+                  const labels: Record<string, string> = {
+                    strength:"체력", intelligence:"지능", charm:"매력", creativity:"예술",
+                    morality:"도덕", faith:"신앙", combat:"전투", magic:"마법", cooking:"요리", housework:"가사"
+                  }
+                  return (
+                    <div key={stat} className="flex items-center gap-2">
+                      <span className="text-xs w-10 shrink-0 text-muted-foreground">{labels[stat]}</span>
+                      <input type="range" min={0} max={500} step={10} value={val}
+                        onChange={e => debugSetStat(stat, Number(e.target.value))}
+                        className="flex-1 accent-primary" />
+                      <span className="text-xs w-8 text-right tabular-nums">{val}</span>
+                    </div>
+                  )
+                })}
+                <Button size="sm" variant="outline" className="w-full text-xs mt-1"
+                  onClick={() => {
+                    const maxStats = Object.fromEntries(
+                      ["strength","intelligence","charm","creativity","morality","faith","combat","magic","cooking","housework"].map(s => [s, 300])
+                    )
+                    useGameStore.setState(s => ({ character: { ...s.character, stats: { ...s.character.stats, ...maxStats } } }))
+                  }}>
+                  전체 스탯 300으로 설정
+                </Button>
               </CardContent>
             </Card>
           </div>

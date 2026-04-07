@@ -23,6 +23,7 @@ import { PerkScreen } from "./perk-screen"
 import { SettingsScreen } from "./settings-screen"
 import { EventResultModal } from "./event-result-modal"
 import { WanderingMerchantPopup } from "./wandering-merchant-popup"
+import { FestivalScreen } from "./festival-screen"
 
 export function Game() {
   const { screen } = useGameStore()
@@ -68,6 +69,8 @@ export function Game() {
             return <SettingsScreen />
           case "seasonal":
             return <SeasonalEventScreen />
+          case "festival":
+            return <FestivalScreen />
           case "talk":
             return <TalkScreen />
           case "wardrobe":
