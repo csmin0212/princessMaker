@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useGameStore, ITEMS, WEAPONS, OUTFITS, ACCESSORIES, SEASONAL_SHOP_ENTRIES,
-         Item, Weapon, Outfit, Accessory } from "@/lib/game-store"
+         GIFT_GRADES, Item, Weapon, Outfit, Accessory } from "@/lib/game-store"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -251,11 +251,12 @@ export function ShopScreen() {
         )}
 
         <Tabs defaultValue="stat">
-          <TabsList className="grid grid-cols-4 mb-5 w-full">
+          <TabsList className="grid grid-cols-5 mb-5 w-full">
             <TabsTrigger value="stat">⭐ 능력치</TabsTrigger>
             <TabsTrigger value="weapon">⚔️ 무기</TabsTrigger>
             <TabsTrigger value="outfit">👗 의상</TabsTrigger>
             <TabsTrigger value="accessory">💍 장신구</TabsTrigger>
+            <TabsTrigger value="gift">💝 선물</TabsTrigger>
           </TabsList>
 
           {/* 능력치 */}
@@ -456,6 +457,83 @@ export function ShopScreen() {
                   </div>
                 </div>
               </div>
+            </ScrollArea>
+          </TabsContent>
+
+          {/* 선물 */}
+          <TabsContent value="gift">
+            <p className="text-xs text-muted-foreground mb-3">선물 아이템은 NPC 화면에서 선물하기로 사용할 수 있습니다</p>
+            <ScrollArea className="h-[calc(100vh-380px)]">
+              {(() => {
+                const giftItems = ITEMS.filter(item =>
+                  [...GIFT_GRADES.low.items, ...GIFT_GRADES.mid.items, ...GIFT_GRADES.high.items].includes(item.id)
+                )
+                const getGiftGrade = (id: string) => {
+                  if (GIFT_GRADES.high.items.includes(id)) return { label: "희귀", gain: GIFT_GRADES.high.affectionGain, color: "text-purple-600 border-purple-200 bg-purple-50" }
+                  if (GIFT_GRADES.mid.items.includes(id))  return { label: "고급", gain: GIFT_GRADES.mid.affectionGain,  color: "text-blue-600 border-blue-200 bg-blue-50" }
+                  return { label: "일반", gain: GIFT_GRADES.low.affectionGain, color: "text-slate-600 border-slate-200 bg-slate-50" }
+                }
+                const gradeOrder = [
+                  { key: "low",  label: "일반", items: GIFT_GRADES.low.items },
+                  { key: "mid",  label: "고급", items: GIFT_GRADES.mid.items },
+                  { key: "high", label: "희귀", items: GIFT_GRADES.high.items },
+                ]
+                return (
+                  <div className="space-y-4 pr-2">
+                    {gradeOrder.map(grade => {
+                      const gradeItems = giftItems.filter(item => grade.items.includes(item.id))
+                      if (gradeItems.length === 0) return null
+                      return (
+                        <div key={grade.key}>
+                          <div className="text-xs font-bold text-muted-foreground mb-2">{grade.label} 선물</div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {gradeItems.map(item => {
+                              const gradeInfo = getGiftGrade(item.id)
+                              return (
+                                <Card key={item.id} className={cn("border-2 transition-all", gradeInfo.color)}>
+                                  <CardContent className="p-3 flex items-center gap-3">
+                                    <span className="text-3xl flex-shrink-0">{item.icon}</span>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-1 flex-wrap">
+                                        <span className="font-semibold text-sm">{item.name}</span>
+                                        <Badge className={cn("text-[10px] px-1 py-0", gradeInfo.color)}>{gradeInfo.label}</Badge>
+                                      </div>
+                                      <p className="text-xs text-muted-foreground mt-0.5">💕 호감 +{gradeInfo.gain}</p>
+                                    </div>
+                                    <div className="text-right flex-shrink-0">
+                                      <div className="text-sm font-bold mb-1">
+                                        {hasThrifty ? (
+                                          <span className="text-green-600">🪙 {discountedPrice(item.price)}G <span className="text-xs line-through text-muted-foreground">{item.price}G</span></span>
+                                        ) : (
+                                          <span className="text-amber-600">🪙 {item.price}G</span>
+                                        )}
+                                      </div>
+                                      <Button size="sm" disabled={gold < discountedPrice(item.price)}
+                                        className="h-7 text-xs px-3"
+                                        onClick={() => openPurchase({
+                                          icon: item.icon,
+                                          name: item.name,
+                                          description: `💕 호감 +${gradeInfo.gain} · ${gradeInfo.label} 선물`,
+                                          unitPrice: discountedPrice(item.price),
+                                          onConfirm: (qty) => {
+                                            const ok = buyItem(item, qty)
+                                            flash(ok ? `${item.name} ${qty}개 구매!` : "골드 부족", ok)
+                                          },
+                                        })}>
+                                        {gold < discountedPrice(item.price) ? "부족" : "구매"}
+                                      </Button>
+                                    </div>
+                                  </CardContent>
+                                </Card>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
             </ScrollArea>
           </TabsContent>
         </Tabs>

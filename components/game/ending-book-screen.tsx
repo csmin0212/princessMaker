@@ -1,7 +1,7 @@
 "use client"
 
 import { useGameStore, ENDINGS } from "@/lib/game-store"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -32,8 +32,11 @@ const categoryColors: Record<string, string> = {
   secret: "bg-cyan-100 text-cyan-700 border-cyan-300",
 }
 
+const mainEndings = ENDINGS.filter(e => e.type !== "romance")
+const romanceEndings = ENDINGS.filter(e => e.type === "romance")
+
 export function EndingBookScreen() {
-  const { unlockedEndings, setScreen, ending } = useGameStore()
+  const { unlockedEndings, setScreen } = useGameStore()
 
   const difficultyStars = (d: number) => {
     const filled = "\u2605"
@@ -61,6 +64,8 @@ export function EndingBookScreen() {
         <Tabs defaultValue="all">
           <TabsList className="flex flex-wrap h-auto gap-1">
             <TabsTrigger value="all" className="text-xs">전체</TabsTrigger>
+            <TabsTrigger value="main" className="text-xs">일반</TabsTrigger>
+            <TabsTrigger value="romance" className="text-xs">💖 로맨스</TabsTrigger>
             {categories.map(cat => (
               <TabsTrigger key={cat} value={cat} className="text-xs">
                 {categoryLabels[cat]}
@@ -70,6 +75,14 @@ export function EndingBookScreen() {
 
           <TabsContent value="all">
             <EndingGrid endings={ENDINGS} unlockedEndings={unlockedEndings} difficultyStars={difficultyStars} />
+          </TabsContent>
+
+          <TabsContent value="main">
+            <EndingGrid endings={mainEndings} unlockedEndings={unlockedEndings} difficultyStars={difficultyStars} />
+          </TabsContent>
+
+          <TabsContent value="romance">
+            <EndingGrid endings={romanceEndings} unlockedEndings={unlockedEndings} difficultyStars={difficultyStars} isRomance />
           </TabsContent>
 
           {categories.map(cat => (
@@ -91,23 +104,28 @@ function EndingGrid({
   endings,
   unlockedEndings,
   difficultyStars,
+  isRomance = false,
 }: {
   endings: typeof ENDINGS
   unlockedEndings: string[]
   difficultyStars: (d: number) => string
+  isRomance?: boolean
 }) {
   return (
     <ScrollArea className="h-[600px]">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-1">
         {endings.map(e => {
           const unlocked = unlockedEndings.includes(e.id)
+          const romance = e.type === "romance"
 
           return (
             <Card
               key={e.id}
               className={cn(
                 "transition-all",
-                unlocked ? "hover:shadow-md" : "opacity-50"
+                unlocked ? "hover:shadow-md" : "opacity-50",
+                romance && unlocked && "border-2 border-rose-300 bg-rose-50/30",
+                romance && !unlocked && "border-2 border-rose-200",
               )}
             >
               <CardContent className="p-4">
@@ -123,9 +141,15 @@ function EndingGrid({
                       <span className="font-bold truncate">
                         {unlocked ? e.title : "???"}
                       </span>
-                      <Badge className={cn("text-xs", categoryColors[e.category])}>
-                        {categoryLabels[e.category]}
-                      </Badge>
+                      {romance ? (
+                        <Badge className="text-xs bg-rose-100 text-rose-700 border-rose-300">
+                          💖 로맨스
+                        </Badge>
+                      ) : (
+                        <Badge className={cn("text-xs", categoryColors[e.category])}>
+                          {categoryLabels[e.category]}
+                        </Badge>
+                      )}
                     </div>
                     <p className="text-yellow-500 text-sm tracking-widest mt-1">
                       {difficultyStars(e.difficulty)}
