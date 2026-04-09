@@ -232,12 +232,6 @@ export function ShopScreen() {
           </div>
         )}
 
-        {/* 포션 안내 배너 */}
-        <div className="mb-4 p-3 rounded-xl bg-violet-50 border border-violet-200 flex items-center gap-2 text-sm text-violet-700">
-          <span className="text-xl">🧙</span>
-          <span>포션·소모품은 <strong>방랑상인</strong>에게서 구매할 수 있습니다. (매 시즌 2번째 달 2주차 방문)</span>
-        </div>
-
         {/* 계절 한정 배너 */}
         {(seaOutfits.length > 0 || seaWeapons.length > 0 || seaAcc.length > 0) && (
           <div className="mb-5 p-3 rounded-xl bg-amber-50 border-2 border-amber-300">

@@ -2515,10 +2515,15 @@ export const useGameStore = create<GameState>((set, get) => ({
         const season = getSeason(month)
         const triggered = state.seasonalEventsTriggered
 
-        // 우선순위 1: triggerYear+triggerMonth가 지정된 확정 이벤트
+        // 이벤트가 과거에 한 번이라도 발생했는지 확인 (연도 무관)
+        const wasEverTriggered = (id: string) => triggered.some(t => t.endsWith(`-${id}`))
+
+        // 우선순위 1: triggerMonth가 지정된 확정 이벤트 (triggerYear 이상이면 발생)
         const scheduledEvent = SEASONAL_EVENTS.find(e =>
-          e.triggerYear === year && e.triggerMonth === month &&
-          !triggered.includes(`${year}-${e.id}`)
+          e.triggerYear !== undefined &&
+          e.triggerMonth === month &&
+          year >= e.triggerYear &&
+          !wasEverTriggered(e.id)
         )
 
         if (scheduledEvent) {
@@ -2527,7 +2532,7 @@ export const useGameStore = create<GameState>((set, get) => ({
           // 우선순위 2: 시즌 랜덤 이벤트 (triggerYear 없는 일반 이벤트)
           const availableEvents = SEASONAL_EVENTS.filter(e =>
             e.season === season &&
-            !e.triggerYear &&  // 확정 이벤트는 제외
+            e.triggerYear === undefined &&  // 확정 이벤트는 제외
             !triggered.includes(`${year}-${e.id}`) &&
             (e.minYear === undefined || year >= e.minYear) &&
             (e.maxYear === undefined || year <= e.maxYear)

@@ -64,7 +64,7 @@ export function GameDashboard() {
             <div className="flex items-center gap-2 text-sm text-violet-700 dark:text-violet-300">
               <span className="text-xl">🧙</span>
               <span className="font-semibold">방랑상인이 이번 주 마을을 방문 중입니다!</span>
-              <span className="hidden sm:inline text-xs text-violet-500">포션·소모품 구매 가능</span>
+              <span className="hidden sm:inline text-xs text-violet-500">능력치 강화 아이템 구매 가능</span>
             </div>
             <Button size="sm" className="bg-violet-600 hover:bg-violet-700 text-white text-xs px-3 h-7"
               onClick={openWanderingMerchant}>
