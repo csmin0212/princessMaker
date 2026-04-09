@@ -239,6 +239,8 @@ export interface SeasonalEvent {
   season: "spring" | "summer" | "fall" | "winter"
   minYear?: number   // 최소 발생 연차 (없으면 제한 없음)
   maxYear?: number   // 최대 발생 연차
+  triggerYear?: number  // 확정 발생 연차 (지정 시 해당 연도+월에 우선 발생)
+  triggerMonth?: number // 확정 발생 월 (triggerYear와 함께 사용)
   title: string
   description: string
   choices: {
@@ -1180,9 +1182,9 @@ export const SEASONAL_EVENTS: SeasonalEvent[] = [
 
   // ── 아카데미 이벤트 ──────────────────────────────────────────
   {
-    id: "academy-entrance", season: "spring", minYear: 2, maxYear: 2,
+    id: "academy-entrance", season: "spring", triggerYear: 1, triggerMonth: 3,
     title: "🏫 아카데미 입학식",
-    description: "2년차 봄, 왕립 아카데미 입학식이 열렸다. 화려한 홀에 수많은 신입생들이 모였다. 어떻게 입학식에 임할 것인가?",
+    description: "왕립 아카데미 입학식이 열렸다. 화려한 홀에 수많은 신입생들이 모였다. 어떻게 입학식에 임할 것인가?",
     choices: [
       { text: "당당하게 앞줄에 선다", requirements: { charm: 75 },
         outcomes: { description: "눈에 띄는 등장으로 많은 학생들의 시선을 끌었다. 교장 선생님이 칭찬을 건넸다.", statChanges: { charm: 3, morality: 1 } } },
@@ -1193,9 +1195,9 @@ export const SEASONAL_EVENTS: SeasonalEvent[] = [
     ]
   },
   {
-    id: "academy-midterm", season: "summer", minYear: 2,
+    id: "academy-midterm", season: "summer", triggerYear: 1, triggerMonth: 6,
     title: "📝 아카데미 중간 시험",
-    description: "여름, 아카데미 중간 시험이 다가왔다. 전투, 마법, 학문 세 과목으로 구성된 종합 시험이다.",
+    description: "아카데미 중간 시험이 다가왔다. 전투, 마법, 학문 세 과목으로 구성된 종합 시험이다.",
     choices: [
       { text: "열심히 준비해서 전 과목 응시", requirements: { intelligence: 100, combat: 75 },
         outcomes: { description: "모든 과목에서 우수한 성적을 거뒀다! 교관들이 극찬을 아끼지 않았다.", statChanges: { intelligence: 3, combat: 2, charm: 2 }, goldChange: 100 } },
@@ -1206,9 +1208,9 @@ export const SEASONAL_EVENTS: SeasonalEvent[] = [
     ]
   },
   {
-    id: "academy-ball", season: "fall", minYear: 2,
+    id: "academy-ball", season: "fall", triggerYear: 1, triggerMonth: 9,
     title: "🎭 아카데미 가을 무도회",
-    description: "가을, 아카데미 전통 무도회가 열렸다. 드레스와 예복이 가득한 화려한 밤. 파트너를 구해야 한다.",
+    description: "아카데미 전통 무도회가 열렸다. 드레스와 예복이 가득한 화려한 밤. 파트너를 구해야 한다.",
     choices: [
       { text: "호감도 높은 NPC에게 신청한다", requirements: { charm: 125 },
         outcomes: { description: "아름다운 밤을 함께했다. 춤을 추며 서로의 마음을 확인한 것 같다.", statChanges: { charm: 4, morality: 2 }, outfitReward: "party-dress" } },
@@ -1219,9 +1221,9 @@ export const SEASONAL_EVENTS: SeasonalEvent[] = [
     ]
   },
   {
-    id: "academy-finals", season: "winter", minYear: 2,
+    id: "academy-finals", season: "winter", triggerYear: 1, triggerMonth: 12,
     title: "🎓 아카데미 기말 시험 및 시상식",
-    description: "겨울, 학기 마지막 시험과 시상식이 열렸다. 이 해의 마무리를 어떻게 할 것인가?",
+    description: "학기 마지막 시험과 시상식이 열렸다. 이 해의 마무리를 어떻게 할 것인가?",
     choices: [
       { text: "전력을 다해 최우수상을 노린다", requirements: { intelligence: 125, combat: 100 },
         outcomes: { description: "최우수 학생으로 선정되었다! 트로피와 함께 장학금을 받았다.", statChanges: { intelligence: 4, charm: 3 }, goldChange: 200 } },
@@ -2511,15 +2513,29 @@ export const useGameStore = create<GameState>((set, get) => ({
       // Check seasonal event
       if (month === 3 || month === 6 || month === 9 || month === 12) {
         const season = getSeason(month)
-        const availableEvents = SEASONAL_EVENTS.filter(e =>
-          e.season === season &&
-          !state.seasonalEventsTriggered.includes(`${year}-${e.id}`) &&
-          (e.minYear === undefined || year >= e.minYear) &&
-          (e.maxYear === undefined || year <= e.maxYear)
+        const triggered = state.seasonalEventsTriggered
+
+        // 우선순위 1: triggerYear+triggerMonth가 지정된 확정 이벤트
+        const scheduledEvent = SEASONAL_EVENTS.find(e =>
+          e.triggerYear === year && e.triggerMonth === month &&
+          !triggered.includes(`${year}-${e.id}`)
         )
-        if (availableEvents.length > 0) {
-          const event = availableEvents[Math.floor(Math.random() * availableEvents.length)]
-          set({ currentSeasonalEvent: event, seasonalEventsTriggered: [...state.seasonalEventsTriggered, `${year}-${event.id}`], screen: "seasonal" })
+
+        if (scheduledEvent) {
+          set({ currentSeasonalEvent: scheduledEvent, seasonalEventsTriggered: [...triggered, `${year}-${scheduledEvent.id}`], screen: "seasonal" })
+        } else {
+          // 우선순위 2: 시즌 랜덤 이벤트 (triggerYear 없는 일반 이벤트)
+          const availableEvents = SEASONAL_EVENTS.filter(e =>
+            e.season === season &&
+            !e.triggerYear &&  // 확정 이벤트는 제외
+            !triggered.includes(`${year}-${e.id}`) &&
+            (e.minYear === undefined || year >= e.minYear) &&
+            (e.maxYear === undefined || year <= e.maxYear)
+          )
+          if (availableEvents.length > 0) {
+            const event = availableEvents[Math.floor(Math.random() * availableEvents.length)]
+            set({ currentSeasonalEvent: event, seasonalEventsTriggered: [...triggered, `${year}-${event.id}`], screen: "seasonal" })
+          }
         }
       }
 

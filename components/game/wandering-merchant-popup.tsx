@@ -9,9 +9,9 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 
-// 방랑상인이 취급하는 포션 ID 목록 (health / stress 효과가 있는 아이템)
+// 방랑상인이 취급하는 아이템: 능력치 강화 소모품 (포션류 제외)
 const MERCHANT_ITEMS: Item[] = ITEMS.filter(
-  i => i.effect.health !== undefined || i.effect.stress !== undefined,
+  i => i.effect.health === undefined && i.effect.stress === undefined,
 )
 
 const statLabel: Record<string, string> = {
@@ -121,7 +121,7 @@ export function WanderingMerchantPopup() {
 
         {/* 대사 */}
         <div className="bg-muted/40 rounded-lg px-4 py-3 text-sm italic text-muted-foreground border">
-          "어서오세요, 아가씨. 먼 길을 돌아다니며 모은 귀한 약초와 물약을 팔고 있습죠. 필요하신 만큼 가져가세요~"
+          "어서오세요, 아가씨. 먼 곳에서 구해온 희귀한 서적과 비약들입죠. 능력을 키우고 싶다면 이걸 노려보세요~"
         </div>
 
         {/* 알림 */}

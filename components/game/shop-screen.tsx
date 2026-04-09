@@ -187,8 +187,8 @@ export function ShopScreen() {
   const seasonName = seasonLabel[season]
   const seasonIco  = seasonIcon[season]
 
-  // 능력치 아이템 (포션 제외 — 포션은 방랑상인 전용)
-  const statItems = ITEMS.filter(i => i.effect.health === undefined && i.effect.stress === undefined)
+  // 소모품 + 능력치 아이템 전체
+  const statItems = ITEMS
   // 상시 무기
   const baseWeapons   = WEAPONS.filter(w => w.price && w.obtainMethod === "상점")
   // 상시 의상
