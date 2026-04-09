@@ -436,10 +436,6 @@ interface GameState {
   resolveEvent: (choiceIndex: number) => void
   resolveSeasonalEvent: (choiceIndex: number) => void
   clearEventResult: () => void
-  wanderingMerchantActive: boolean   // 이번 주 상인 마을 방문 여부
-  wanderingMerchantOpen: boolean     // 팝업 열림 여부
-  dismissWanderingMerchant: () => void  // 팝업 닫기 (상인은 여전히 마을에 있음)
-  openWanderingMerchant: () => void    // 팝업 다시 열기
   buyItem: (item: Item, quantity?: number) => boolean
   useItem: (itemId: string) => boolean
   advanceTime: () => void
@@ -1716,8 +1712,6 @@ export const useGameStore = create<GameState>((set, get) => ({
   gameStarted: false,
   eventLog: [],
   dungeon: { ...initialDungeon },
-  wanderingMerchantActive: false,
-  wanderingMerchantOpen: false,
   seasonalEventsTriggered: [],
   unlockedEndings: loadUnlockedFromStorage(),
 
@@ -1746,8 +1740,6 @@ export const useGameStore = create<GameState>((set, get) => ({
       inventory: [],
       currentEvent: null, currentSeasonalEvent: null, currentEventResult: null,
       ending: null, gameStarted: true, eventLog: [], dungeon: { ...initialDungeon },
-      wanderingMerchantActive: false,
-      wanderingMerchantOpen: false,
       seasonalEventsTriggered: [], unlockedEndings: [], screen: "game",
     })
     get().addLog(`${name}의 모험이 시작됩니다!`)
@@ -1763,8 +1755,6 @@ export const useGameStore = create<GameState>((set, get) => ({
       inventory: [],
       currentEvent: null, currentSeasonalEvent: null, currentEventResult: null,
       ending: null, gameStarted: false, eventLog: [], dungeon: { ...initialDungeon },
-      wanderingMerchantActive: false,
-      wanderingMerchantOpen: false,
       seasonalEventsTriggered: [], unlockedEndings: prevUnlocked,
       seasonalShopOutfits: [], seasonalShopWeapons: [],
       seasonalShopAccessories: ['leather-bracelet','copper-ring','glass-bead','iron-bangle','lucky-charm','scholar-pendant'],
@@ -2473,14 +2463,6 @@ export const useGameStore = create<GameState>((set, get) => ({
     return true
   },
 
-  dismissWanderingMerchant: () => {
-    set({ wanderingMerchantOpen: false })
-  },
-
-  openWanderingMerchant: () => {
-    set({ wanderingMerchantOpen: true })
-  },
-
   useItem: (itemId) => {
     const state = get()
     const item = state.inventory.find((i) => i.id === itemId)
@@ -2560,12 +2542,8 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
 
     // 매주 NPC 대화 제한 초기화
-    // 방랑상인: 각 시즌 2번째 달, 2주차에 방문 (2, 5, 8, 11월 2주)
-    const merchantActive = week === 2 && [2, 5, 8, 11].includes(month)
     set({ year, month, week, day: (week - 1) * 7 + 1,
       character: { ...get().character, npcTalkedToday: [] },
-      wanderingMerchantActive: merchantActive,
-      wanderingMerchantOpen: merchantActive,  // 도착하면 팝업 자동 오픈
     })
 
     // 월 변경 시 계절 상점 갱신

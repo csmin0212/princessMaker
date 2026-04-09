@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm tsc --noEmit)",
+      "Bash(pnpm next build)",
+      "Bash(/c/princess/node_modules/.bin/tsc --noEmit)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
